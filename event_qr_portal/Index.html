@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Event QR Portal</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+  <style>
+    :root{--bg:#f5f7fb;--card:#fff;--ink:#121826;--muted:#667085;--line:#e4e7ec;--accent:#111827;--ok:#067647;--danger:#b42318;--gold:#b54708}
+    *{box-sizing:border-box}body{margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,sans-serif;background:var(--bg);color:var(--ink)}
+    .wrap{max-width:1050px;margin:auto;padding:28px 18px 60px}.brand{font-weight:800;font-size:20px}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:28px}
+    .card{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:24px;box-shadow:0 10px 30px rgba(16,24,40,.05)}
+    .hero{padding:34px}.hero h1{font-size:36px;margin:0 0 8px}.muted{color:var(--muted)}label{display:block;font-weight:700;font-size:14px;margin:18px 0 8px}
+    input,select,button{width:100%;padding:13px 14px;border-radius:12px;border:1px solid #d0d5dd;font-size:15px}
+    button{background:var(--accent);color:white;border:0;font-weight:750;cursor:pointer}button.secondary{background:#eef2f6;color:#111827}button:disabled{opacity:.5;cursor:not-allowed}
+    .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:20px}.qr-card{text-align:center}.qr{display:flex;justify-content:center;min-height:190px;align-items:center;margin:16px 0}
+    .pill{display:inline-block;padding:6px 10px;border-radius:999px;background:#f2f4f7;font-size:12px;font-weight:800}.pill.ok{background:#ecfdf3;color:var(--ok)}.pill.pending{background:#fff7ed;color:var(--gold)}
+    .notice{padding:12px 14px;border-radius:12px;margin:12px 0;display:none}.notice.error{display:block;background:#fef3f2;color:var(--danger)}.notice.ok{display:block;background:#ecfdf3;color:var(--ok)}
+    .login{max-width:540px;margin:70px auto}.row{display:grid;grid-template-columns:1fr 1fr;gap:12px}.hidden{display:none!important}.scanner{max-width:600px;margin:auto}.result{text-align:center;margin-top:18px}.big{font-size:24px;font-weight:800}
+    .admin-nav{display:flex;gap:8px;flex-wrap:wrap}.admin-nav button{width:auto}.small{font-size:13px}.modal{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:20px;z-index:10}.modal .card{max-width:420px;width:100%}
+    @media(max-width:760px){.grid{grid-template-columns:1fr}.hero h1{font-size:28px}.row{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top"><div class="brand">EVENT QR PORTAL</div><div id="topRight"></div></div>
+
+  <? if (page === 'participant') { ?>
+  <section id="loginView" class="login card">
+    <h1>Participant Login</h1>
+    <p class="muted">Select your registered name. We will send a one-time OTP to the email address in your registration.</p>
+    <label>Your name</label>
+    <input id="name" list="nameList" autocomplete="name" placeholder="Start typing your name">
+    <datalist id="nameList"></datalist>
+    <button id="sendOtpBtn" onclick="sendOtp()">Send OTP to my email</button>
+    <div id="loginMsg" class="notice"></div>
+
+    <div id="otpBox" class="hidden" style="margin-top:18px">
+      <label>Enter OTP</label>
+      <input id="otp" inputmode="numeric" maxlength="6" autocomplete="one-time-code" placeholder="6-digit OTP">
+      <p id="otpHint" class="small muted"></p>
+      <button onclick="verifyOtpCode()">Verify OTP &amp; Access QRs</button>
+      <button class="secondary" onclick="sendOtp()" style="margin-top:8px">Resend OTP</button>
+    </div>
+  </section>
+
+  <section id="participantView" class="hidden">
+    <div class="hero card">
+      <div class="pill ok">AUTHENTICATED</div>
+      <h1 id="welcome"></h1>
+      <p class="muted">Keep these three QR codes ready. Each one can be redeemed only once.</p>
+      <div id="trackInfo"></div>
+    </div>
+    <div id="participantMsg" class="notice"></div>
+    <div class="grid">
+      <div class="qr-card card"><div class="pill">01 · CHECK-IN</div><div id="qr1" class="qr"></div><div id="checkStatus"></div><p class="small muted">Show this to the check-in desk.</p></div>
+      <div class="qr-card card"><div class="pill">02 · FOOD</div><div id="qr2" class="qr"></div><div id="foodStatus"></div><p class="small muted">Show this at the food counter.</p></div>
+      <div class="qr-card card"><div class="pill">03 · GOODIE KIT</div><div id="qr3" class="qr"></div><div id="goodieStatus"></div><p class="small muted">Show this at the goodie-kit desk.</p></div>
+    </div>
+  </section>
+  <? } else { ?>
+  <section id="adminLogin" class="login card">
+    <h1>Admin Scanner</h1>
+    <p class="muted">This scanner is restricted to emails listed in the <b>Admins</b> sheet.</p>
+    <button onclick="checkAdmin()">Continue as Google account</button>
+    <div id="adminMsg" class="notice"></div>
+  </section>
+
+  <section id="adminView" class="hidden">
+    <div class="hero card">
+      <div class="pill ok">ADMIN</div>
+      <h1>QR Redemption Desk</h1>
+      <p class="muted">Scan a participant QR. Check-in scans require track assignment before redemption.</p>
+      <div class="admin-nav">
+        <button onclick="startScanner()">Start camera</button>
+        <button class="secondary" onclick="stopScanner()">Stop camera</button>
+      </div>
+    </div>
+    <div class="card scanner" style="margin-top:18px">
+      <div id="reader"></div>
+      <div id="scanMsg" class="notice"></div>
+      <div id="scanResult" class="result"></div>
+    </div>
+  </section>
+
+  <div id="trackModal" class="modal hidden">
+    <div class="card">
+      <h2>Assign track</h2>
+      <p id="trackParticipant" class="muted"></p>
+      <label>Track</label>
+      <select id="trackSelect">
+        <? for (var i=0; i<tracks.length; i++) { ?><option><?= tracks[i] ?></option><? } ?>
+      </select>
+      <button onclick="confirmTrack()">Confirm check-in</button>
+      <button class="secondary" onclick="closeTrackModal()" style="margin-top:8px">Cancel</button>
+    </div>
+  </div>
+  <? } ?>
+</div>
+
+<script>
+let sessionId = null;
+let scanner = null;
+let lastToken = '';
+let pendingToken = '';
+let adminEmail = '';
+
+function msg(id,text,type='error'){
+  const el=document.getElementById(id); if(!el)return;
+  el.className='notice '+type; el.textContent=text;
+}
+function clearMsg(id){const el=document.getElementById(id);if(el)el.className='notice';}
+
+<? if (page === 'participant') { ?>
+function loadNames(){
+  const q=document.getElementById('name').value.trim();
+  google.script.run.withSuccessHandler(names=>{
+    document.getElementById('nameList').innerHTML=(names||[]).map(n=>'<option value="'+escapeHtml(n)+'"></option>').join('');
+  }).getParticipantNames(q);
+}
+document.getElementById('name').addEventListener('input',loadNames);
+loadNames();
+
+function sendOtp(){
+  clearMsg('loginMsg');
+  const name=document.getElementById('name').value.trim();
+  if(!name){msg('loginMsg','Select your registered name first.');return;}
+  const btn=document.getElementById('sendOtpBtn');
+  btn.disabled=true; btn.textContent='Sending OTP…';
+  google.script.run.withSuccessHandler(res=>{
+    btn.disabled=false; btn.textContent='Send OTP to my email';
+    if(!res.ok){msg('loginMsg',res.message||'Could not send OTP.');return;}
+    document.getElementById('otpBox').classList.remove('hidden');
+    document.getElementById('otpHint').textContent=res.cooldown ? res.message+' It will be sent to '+res.maskedEmail+'.' : 'OTP sent to '+res.maskedEmail+'. It expires in 10 minutes.';
+    msg('loginMsg',res.message||'OTP sent successfully. Check your email.','ok');
+    document.getElementById('otp').focus();
+  }).withFailureHandler(e=>{
+    btn.disabled=false; btn.textContent='Send OTP to my email';
+    msg('loginMsg',e.message||'Could not send OTP.');
+  }).requestOtp(name);
+}
+
+function verifyOtpCode(){
+  clearMsg('loginMsg');
+  const name=document.getElementById('name').value.trim();
+  const otp=document.getElementById('otp').value.trim();
+  if(!name||!/^[0-9]{6}$/.test(otp)){msg('loginMsg','Enter the 6-digit OTP sent to your email.');return;}
+  google.script.run.withSuccessHandler(res=>{
+    if(!res.ok){msg('loginMsg','Verification failed.');return;}
+    sessionId=res.sessionId;
+    document.getElementById('loginView').classList.add('hidden');
+    document.getElementById('participantView').classList.remove('hidden');
+    loadDashboard();
+  }).withFailureHandler(e=>msg('loginMsg',e.message||'OTP verification failed.')).verifyOtp(name,otp);
+}
+function loadDashboard(){
+  google.script.run.withSuccessHandler(renderDashboard).withFailureHandler(e=>{
+    document.getElementById('participantView').innerHTML='<div class="card"><h2>Session expired</h2><p>'+escapeHtml(e.message)+'</p></div>';
+  }).getParticipantDashboard(sessionId);
+}
+function renderDashboard(p){
+  document.getElementById('welcome').textContent='Welcome, '+p.name;
+  document.getElementById('trackInfo').innerHTML=p.track ? '<span class="pill ok">Assigned track: '+escapeHtml(p.track)+'</span>' : '<span class="pill pending">Track will be assigned at check-in</span>';
+  renderQR('qr1',p.checkin.token,p.checkin.redeemed,'checkStatus');
+  renderQR('qr2',p.food.token,p.food.redeemed,'foodStatus');
+  renderQR('qr3',p.goodie.token,p.goodie.redeemed,'goodieStatus');
+}
+function renderQR(id,token,redeemed,statusId){
+  const el=document.getElementById(id); el.innerHTML='';
+  new QRCode(el,{text:token,width:180,height:180,correctLevel:QRCode.CorrectLevel.M});
+  const s=document.getElementById(statusId);
+  s.innerHTML=redeemed ? '<span class="pill ok">REDEEMED</span>' : '<span class="pill pending">NOT REDEEMED</span>';
+}
+function escapeHtml(s){return String(s||'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));}
+<? } else { ?>
+
+function checkAdmin(){
+  google.script.run.withSuccessHandler(res=>{
+    if(!res.authorized){msg('adminMsg','Your Google account is not authorized for admin scanning.');return;}
+    adminEmail=res.email;
+    document.getElementById('adminLogin').classList.add('hidden');
+    document.getElementById('adminView').classList.remove('hidden');
+    startScanner();
+  }).withFailureHandler(e=>msg('adminMsg',e.message||'Could not verify admin.')).adminStatus('');
+}
+
+function startScanner(){
+  if(scanner){return;}
+  scanner = new Html5Qrcode("reader");
+  scanner.start(
+    {facingMode:"environment"},
+    {fps:10,qrbox:{width:260,height:260}},
+    token => handleToken(token),
+    () => {}
+  ).catch(e=>msg('scanMsg','Camera could not start. Allow camera permission and use HTTPS.'));
+}
+function stopScanner(){
+  if(scanner){scanner.stop().then(()=>{scanner.clear();scanner=null;}).catch(()=>{scanner=null;});}
+}
+function handleToken(token){
+  token=String(token||'').trim();
+  if(!token || token===lastToken)return;
+  lastToken=token;
+  setTimeout(()=>lastToken='',2500);
+  clearMsg('scanMsg');
+  google.script.run.withSuccessHandler(handleRedeem).withFailureHandler(e=>{
+    msg('scanMsg',e.message||'Redemption failed.');
+  }).redeemQR(token,adminEmail,'');
+}
+function handleRedeem(res){
+  if(res.needsTrack){
+    pendingToken = currentPendingTokenHack();
+    document.getElementById('trackParticipant').textContent=res.participant.name+' · '+res.participant.id;
+    document.getElementById('trackSelect').innerHTML=(res.tracks||[]).map(t=>'<option>'+escapeHtml(t)+'</option>').join('');
+    document.getElementById('trackModal').classList.remove('hidden');
+    window._pendingToken = pendingToken;
+    return;
+  }
+  document.getElementById('scanResult').innerHTML='<div class="big">'+escapeHtml(res.participantName)+'</div><p>'+escapeHtml(res.message)+'</p><span class="pill ok">'+escapeHtml(res.type)+'</span>';
+}
+function currentPendingTokenHack(){
+  return window._lastScannedToken || '';
+}
+const originalHandleToken=handleToken;
+handleToken=function(token){
+  window._lastScannedToken=String(token||'').trim();
+  originalHandleToken(token);
+};
+function confirmTrack(){
+  const token=window._pendingToken;
+  const track=document.getElementById('trackSelect').value;
+  if(!token||!track)return;
+  google.script.run.withSuccessHandler(res=>{
+    closeTrackModal();
+    document.getElementById('scanResult').innerHTML='<div class="big">'+escapeHtml(res.participantName)+'</div><p>'+escapeHtml(res.message)+'</p><span class="pill ok">'+escapeHtml(res.track)+'</span>';
+  }).withFailureHandler(e=>msg('scanMsg',e.message||'Could not complete check-in.')).redeemQR(token,adminEmail,track);
+}
+function closeTrackModal(){document.getElementById('trackModal').classList.add('hidden');window._pendingToken='';}
+function escapeHtml(s){return String(s||'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));}
+<? } ?>
+</script>
+</body>
+</html>
