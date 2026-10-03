@@ -1,0 +1,11 @@
+{
+  "name": "aws-scd-registrations",
+  "version": "1.0.0",
+  "description": "Event QR Portal with Google Apps Script + Local Dev Server",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}
