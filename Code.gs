@@ -1,12 +1,14 @@
+/**
+ * Event QR Portal — Google Apps Script Backend
+ * Name + Email/Phone Verification Flow (Zero OTP / No MailApp)
+ */
+
 const CONFIG = {
   PARTICIPANTS_SHEET: 'Participants',
   ADMINS_SHEET: 'Admins',
   AUDIT_SHEET: 'AuditLog',
   TRACKS: ['Track A', 'Track B', 'Track C', 'Track D'],
-  SESSION_TTL_SECONDS: 600,
-  OTP_TTL_SECONDS: 600,
-  OTP_RESEND_COOLDOWN_SECONDS: 60,
-  OTP_MAX_ATTEMPTS: 5
+  SESSION_TTL_SECONDS: 3600 // 1 hour session
 };
 
 const PARTICIPANT_HEADERS = [
@@ -19,16 +21,24 @@ const PARTICIPANT_HEADERS = [
 const ADMIN_HEADERS = ['Email', 'Name', 'Active'];
 const AUDIT_HEADERS = ['Timestamp', 'Admin Email', 'Action', 'QR Type', 'Participant ID', 'Participant Name', 'Track', 'Result', 'Details'];
 
+/**
+ * Web App entry point.
+ * Serves participant portal by default, or admin scanner if ?page=admin
+ */
 function doGet(e) {
   const page = (e && e.parameter && e.parameter.page) || 'participant';
   const template = HtmlService.createTemplateFromFile('Index');
   template.page = page === 'admin' ? 'admin' : 'participant';
   template.tracks = CONFIG.TRACKS;
   return template.evaluate()
-    .setTitle('Event Participant Portal')
-    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+    .setTitle(page === 'admin' ? 'Event Admin Scanner' : 'Event Participant Portal')
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
+    .addMetaTag('viewport', 'width=device-width, initial-scale=1.0');
 }
 
+/**
+ * Initializes sheets, sets headers, and seeds IDs & QR tokens if missing.
+ */
 function setupSheets() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const p = getOrCreateSheet_(ss, CONFIG.PARTICIPANTS_SHEET, PARTICIPANT_HEADERS);
@@ -40,15 +50,17 @@ function setupSheets() {
 
   [p, a, l].forEach(s => {
     s.setFrozenRows(1);
-    s.autoResizeColumns(1, s.getLastColumn());
+    s.autoResizeColumns(1, Math.min(s.getLastColumn(), 15));
   });
-  return 'Sheets ready';
+  return 'Sheets initialized successfully';
 }
 
 function getOrCreateSheet_(ss, name, headers) {
   let sheet = ss.getSheetByName(name);
   if (!sheet) sheet = ss.insertSheet(name);
-  if (sheet.getLastRow() === 0) sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+  if (sheet.getLastRow() === 0) {
+    sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+  }
   return sheet;
 }
 
@@ -70,174 +82,206 @@ function seedParticipantIdsAndTokens_(sheet) {
     const row = values[i];
     const name = String(row[1] || '').trim();
     if (!name) continue;
-    if (!row[0]) row[0] = 'P-' + Utilities.getUuid().slice(0, 8).toUpperCase();
-    if (!row[4]) row[4] = newToken_('CHK');
-    if (!row[5]) row[5] = newToken_('FOD');
-    if (!row[6]) row[6] = newToken_('GDK');
-    updates.push({row: i + 2, values: row});
+
+    let modified = false;
+    const id = row[0] || ('P-' + Utilities.getUuid().slice(0, 8).toUpperCase());
+    if (!row[0]) { row[0] = id; modified = true; }
+    if (!row[4] || String(row[4]).indexOf('CHK-') === 0) { row[4] = id + '-CHK'; modified = true; }
+    if (!row[5] || String(row[5]).indexOf('FOD-') === 0) { row[5] = id + '-FOD'; modified = true; }
+    if (!row[6] || String(row[6]).indexOf('GDK-') === 0) { row[6] = id + '-GDK'; modified = true; }
+
+    if (modified) {
+      updates.push({ row: i + 2, values: row });
+    }
   }
   updates.forEach(u => sheet.getRange(u.row, 1, 1, PARTICIPANT_HEADERS.length).setValues([u.values]));
 }
 
-function newToken_(prefix) {
-  return prefix + '-' + Utilities.getUuid().replace(/-/g, '') + '-' + Utilities.getUuid().slice(0, 8);
+function newToken_(prefix, id) {
+  return (id || 'P') + '-' + prefix;
 }
 
-function newOtp_() {
-  return String(Math.floor(100000 + Math.random() * 900000));
-}
-
-function normalize_(s) {
+function normalizeName_(s) {
   return String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
-function mask_(value) {
-  const s = String(value || '');
-  if (!s) return '';
-  if (s.includes('@')) {
-    const parts = s.split('@');
-    return (parts[0].slice(0, 2) + '***@' + parts[1]);
-  }
-  return s.length <= 4 ? '****' : '*'.repeat(Math.max(0, s.length - 4)) + s.slice(-4);
+function normalizeEmail_(s) {
+  return String(s || '').trim().toLowerCase();
 }
 
+function normalizeDigits_(s) {
+  return String(s || '').replace(/\D/g, '');
+}
+
+/**
+ * Normalizes phone numbers and checks for equivalence.
+ * Supports +91, leading 0, spaces, dashes, parentheses by comparing last 10 digits.
+ */
+function phonesMatch_(p1, p2) {
+  const d1 = normalizeDigits_(p1);
+  const d2 = normalizeDigits_(p2);
+  if (!d1 || !d2) return false;
+  if (d1 === d2) return true;
+  if (d1.length >= 10 && d2.length >= 10) {
+    return d1.slice(-10) === d2.slice(-10);
+  }
+  return false;
+}
+
+function levenshteinDistance_(s1, s2) {
+  const m = s1.length, n = s2.length;
+  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = 0; i <= m; i++) dp[i][0] = i;
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      if (s1[i - 1] === s2[j - 1]) dp[i][j] = dp[i - 1][j - 1];
+      else dp[i][j] = 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
+    }
+  }
+  return dp[m][n];
+}
+
+function wordsMatchOrSimilar_(w1, w2) {
+  if (w1 === w2) return true;
+  if (w1.indexOf(w2) !== -1 || w2.indexOf(w1) !== -1) return true;
+  const maxLen = Math.max(w1.length, w2.length);
+  if (maxLen <= 3) return w1 === w2;
+  const dist = levenshteinDistance_(w1, w2);
+  return dist <= (maxLen > 6 ? 2 : 1);
+}
+
+function namesAreSimilar_(inputName, registeredName) {
+  const n1 = normalizeName_(inputName);
+  const n2 = normalizeName_(registeredName);
+  if (n1 === n2) return true;
+  if (n1.indexOf(n2) !== -1 || n2.indexOf(n1) !== -1) return true;
+
+  const t1 = n1.split(/\s+/).filter(Boolean);
+  const t2 = n2.split(/\s+/).filter(Boolean);
+
+  const allT1Matched = t1.length > 0 && t1.every(w1 => t2.some(w2 => wordsMatchOrSimilar_(w1, w2)));
+  if (allT1Matched) return true;
+
+  const anyTokenMatch = t1.some(w1 => w1.length >= 3 && t2.some(w2 => wordsMatchOrSimilar_(w1, w2)));
+  if (anyTokenMatch) {
+    const totalDist = levenshteinDistance_(n1, n2);
+    if (totalDist <= Math.max(3, Math.floor(Math.max(n1.length, n2.length) * 0.35))) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Returns list of participant names matching query.
+ * Only returns names — zero sensitive information (emails, phones, tokens) is exposed.
+ */
 function getParticipantNames(search) {
   setupSheets();
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.PARTICIPANTS_SHEET);
   const lastRow = sheet.getLastRow();
   if (lastRow < 2) return [];
 
-  const query = normalize_(search);
+  const query = normalizeName_(search);
   const names = sheet.getRange(2, 2, lastRow - 1, 1).getValues().flat()
     .map(String)
     .map(s => s.trim())
     .filter(Boolean);
 
   const unique = [...new Set(names)];
-  if (!query) return unique.slice(0, 30);
-  return unique.filter(n => normalize_(n).includes(query)).slice(0, 30);
+  if (!query) return unique.slice(0, 40);
+
+  const directMatches = unique.filter(n => normalizeName_(n).indexOf(query) !== -1);
+  const fuzzyMatches = unique.filter(n => directMatches.indexOf(n) === -1 && namesAreSimilar_(query, n));
+  return directMatches.concat(fuzzyMatches).slice(0, 40);
 }
 
 /**
- * Step 1 of participant login.
- * The participant selects their registered name. A one-time OTP is sent
- * to the email stored for that participant in the Participants sheet.
+ * Participant Verification
+ * Checks that Selected Name + Entered Email OR Phone match the same participant record.
+ * Completely replaces the OTP flow.
  */
-function requestOtp(name) {
+function verifyParticipant(name, emailOrPhone) {
   setupSheets();
-  const n = normalize_(name);
-  if (!n) throw new Error('Please select your registered name.');
+  const inputName = String(name || '').trim();
+  const credential = String(emailOrPhone || '').trim();
+
+  if (!inputName) {
+    throw new Error('Please select or search your registered name.');
+  }
+  if (!credential) {
+    throw new Error('Please enter your registered email or phone number.');
+  }
 
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.PARTICIPANTS_SHEET);
   const lastRow = sheet.getLastRow();
-  if (lastRow < 2) throw new Error('No participants found.');
+  if (lastRow < 2) {
+    throw new Error('No registered participants found in the database.');
+  }
 
   const rows = sheet.getRange(2, 1, lastRow - 1, PARTICIPANT_HEADERS.length).getValues();
-  const matches = rows.filter(r => normalize_(r[1]) === n);
 
-  if (!matches.length) throw new Error('Participant name not found. Please select your registered name.');
-  if (matches.length > 1) {
-    throw new Error('More than one participant has this name. Please contact the registration desk for assistance.');
-  }
+  const isEmailInput = credential.indexOf('@') !== -1;
+  const normalizedInputEmail = normalizeEmail_(credential);
 
-  const participant = matches[0];
-  const email = String(participant[3] || '').trim();
-  if (!email || !email.includes('@')) {
-    throw new Error('No valid email address is registered for this participant. Please contact the registration desk.');
-  }
-
-  const participantId = String(participant[0]);
-  const cooldownKey = 'OTP_COOLDOWN_' + participantId;
-  if (CacheService.getScriptCache().get(cooldownKey)) {
-    return {
-      ok: true,
-      cooldown: true,
-      maskedEmail: mask_(email),
-      message: 'An OTP was already sent recently. Please wait before requesting another one.'
-    };
-  }
-
-  const otp = newOtp_();
-  const cache = CacheService.getScriptCache();
-  const otpKey = 'OTP_' + participantId;
-  const payload = {
-    participantId,
-    name: participant[1],
-    otp,
-    attempts: 0,
-    createdAt: Date.now()
-  };
-
-  cache.put(otpKey, JSON.stringify(payload), CONFIG.OTP_TTL_SECONDS);
-  cache.put(cooldownKey, '1', CONFIG.OTP_RESEND_COOLDOWN_SECONDS);
-
-  const subject = 'Your Event Portal OTP';
-  const htmlBody = `
-    <div style="font-family:Arial,sans-serif;max-width:520px;margin:auto;padding:24px;color:#111827">
-      <h2 style="margin-bottom:8px">Event Portal Verification</h2>
-      <p>Hello <b>${escapeHtml_(participant[1])}</b>,</p>
-      <p>Use the following one-time password to access your event QR codes:</p>
-      <div style="font-size:32px;font-weight:800;letter-spacing:8px;background:#f3f4f6;padding:18px;text-align:center;border-radius:12px">${otp}</div>
-      <p style="margin-top:20px">This OTP expires in 10 minutes and can be used only once.</p>
-      <p style="color:#667085;font-size:13px">If you did not request this code, you can ignore this email.</p>
-    </div>`;
-
-  MailApp.sendEmail({
-    to: email,
-    subject: subject,
-    htmlBody: htmlBody,
-    body: `Your Event Portal OTP is ${otp}. It expires in 10 minutes and can be used only once.`
+  // 1. Search for matching credential in dataset
+  const credMatches = rows.filter(r => {
+    const rowPhone = r[2];
+    const rowEmail = normalizeEmail_(r[3]);
+    const emailMatches = isEmailInput && rowEmail && (rowEmail === normalizedInputEmail);
+    const phoneMatches = rowPhone && phonesMatch_(credential, rowPhone);
+    return emailMatches || phoneMatches;
   });
 
-  return {
-    ok: true,
-    maskedEmail: mask_(email),
-    message: 'OTP sent successfully.'
-  };
-}
+  let verifiedRow = null;
 
-/** Step 2 of participant login. */
-function verifyOtp(name, otp) {
-  setupSheets();
-  const n = normalize_(name);
-  const code = String(otp || '').trim();
-  if (!n || !/^\d{6}$/.test(code)) throw new Error('Enter the 6-digit OTP sent to your email.');
-
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.PARTICIPANTS_SHEET);
-  const lastRow = sheet.getLastRow();
-  if (lastRow < 2) throw new Error('No participants found.');
-
-  const rows = sheet.getRange(2, 1, lastRow - 1, PARTICIPANT_HEADERS.length).getValues();
-  const matches = rows.filter(r => normalize_(r[1]) === n);
-  if (matches.length !== 1) throw new Error('Participant could not be verified. Please start again.');
-
-  const participant = matches[0];
-  const participantId = String(participant[0]);
-  const cache = CacheService.getScriptCache();
-  const otpKey = 'OTP_' + participantId;
-  const raw = cache.get(otpKey);
-  if (!raw) throw new Error('OTP expired. Please request a new OTP.');
-
-  const data = JSON.parse(raw);
-  if (data.attempts >= CONFIG.OTP_MAX_ATTEMPTS) {
-    cache.remove(otpKey);
-    throw new Error('Too many incorrect attempts. Please request a new OTP.');
+  if (credMatches.length > 0) {
+    verifiedRow = credMatches.find(r => namesAreSimilar_(inputName, r[1]));
+    if (!verifiedRow && credMatches.length === 1) {
+      const t1 = normalizeName_(inputName).split(/\s+/).filter(Boolean);
+      const t2 = normalizeName_(credMatches[0][1]).split(/\s+/).filter(Boolean);
+      const hasCommonWord = t1.some(w1 => t2.some(w2 => wordsMatchOrSimilar_(w1, w2)));
+      if (hasCommonWord || namesAreSimilar_(inputName, credMatches[0][1])) {
+        verifiedRow = credMatches[0];
+      }
+    }
   }
 
-  if (data.otp !== code) {
-    data.attempts = Number(data.attempts || 0) + 1;
-    cache.put(otpKey, JSON.stringify(data), CONFIG.OTP_TTL_SECONDS);
-    const remaining = Math.max(0, CONFIG.OTP_MAX_ATTEMPTS - data.attempts);
-    throw new Error('Incorrect OTP. ' + remaining + ' attempt(s) remaining.');
+  // 2. If not found by credential, search by name candidates
+  if (!verifiedRow) {
+    const nameCandidates = rows.filter(r => namesAreSimilar_(inputName, r[1]));
+    if (nameCandidates.length > 0) {
+      verifiedRow = nameCandidates.find(r => {
+        const rowPhone = r[2];
+        const rowEmail = normalizeEmail_(r[3]);
+        const emailMatches = isEmailInput && rowEmail && (rowEmail === normalizedInputEmail);
+        const phoneMatches = rowPhone && phonesMatch_(credential, rowPhone);
+        return emailMatches || phoneMatches;
+      });
+    }
   }
 
-  cache.remove(otpKey);
-  cache.remove('OTP_COOLDOWN_' + participantId);
+  if (!verifiedRow) {
+    const nameExists = rows.some(r => namesAreSimilar_(inputName, r[1]));
+    if (!nameExists) {
+      throw new Error('Name not found in the registration list. Please check the spelling and try again.');
+    } else {
+      throw new Error('Verification failed. The entered email or phone number does not match the registration record for this participant.');
+    }
+  }
 
+  // Ensure tokens are present
+  if (!verifiedRow[4] || !verifiedRow[5] || !verifiedRow[6]) {
+    seedParticipantIdsAndTokens_(sheet);
+  }
+
+  // Create participant session
   const sessionId = Utilities.getUuid();
-  cache.put(
+  CacheService.getScriptCache().put(
     'SESSION_' + sessionId,
-    JSON.stringify({participantId: participant[0], name: participant[1]}),
+    JSON.stringify({ participantId: verifiedRow[0], name: verifiedRow[1] }),
     CONFIG.SESSION_TTL_SECONDS
   );
 
@@ -245,25 +289,22 @@ function verifyOtp(name, otp) {
     ok: true,
     sessionId,
     participant: {
-      id: participant[0],
-      name: participant[1],
-      checkinRedeemed: !!participant[7],
-      foodRedeemed: !!participant[8],
-      goodieRedeemed: !!participant[9],
-      track: participant[10] || ''
+      id: verifiedRow[0],
+      name: verifiedRow[1]
     }
   };
 }
 
-function escapeHtml_(s) {
-  return String(s || '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));
-}
-
+/**
+ * Returns dashboard info for authenticated participant session.
+ */
 function getParticipantDashboard(sessionId) {
   const session = getSession_(sessionId);
-  const row = findParticipantRow_(session.participantId);
-  if (!row) throw new Error('Participant not found.');
-  return participantResponse_(row);
+  const rowObj = findParticipantRow_(session.participantId);
+  if (!rowObj) {
+    throw new Error('Participant record could not be found.');
+  }
+  return participantResponse_(rowObj.values);
 }
 
 function getSession_(sessionId) {
@@ -280,109 +321,319 @@ function findParticipantRow_(participantId) {
   const ids = sheet.getRange(2, 1, lastRow - 1, 1).getValues().flat();
   const idx = ids.findIndex(id => String(id) === String(participantId));
   if (idx < 0) return null;
-  return {sheet, rowNumber: idx + 2, values: sheet.getRange(idx + 2, 1, 1, PARTICIPANT_HEADERS.length).getValues()[0]};
-}
-
-function participantResponse_(obj) {
-  const r = obj.values;
   return {
-    id: r[0], name: r[1], email: mask_(r[3]),
-    track: r[10] || '',
-    checkin: {redeemed: !!r[7], token: r[4]},
-    food: {redeemed: !!r[8], token: r[5]},
-    goodie: {redeemed: !!r[9], token: r[6]}
+    sheet,
+    rowNumber: idx + 2,
+    values: sheet.getRange(idx + 2, 1, 1, PARTICIPANT_HEADERS.length).getValues()[0]
   };
 }
 
-function redeemQR(token, adminEmail, track) {
+function participantResponse_(r) {
+  return {
+    id: r[0],
+    name: r[1],
+    track: r[10] || '',
+    checkedInAt: formatDate_(r[11]),
+    foodRedeemedAt: formatDate_(r[12]),
+    goodieRedeemedAt: formatDate_(r[13]),
+    checkin: {
+      redeemed: !!r[7],
+      token: r[4],
+      redeemedAt: formatDate_(r[11])
+    },
+    food: {
+      redeemed: !!r[8],
+      token: r[5],
+      redeemedAt: formatDate_(r[12])
+    },
+    goodie: {
+      redeemed: !!r[9],
+      token: r[6],
+      redeemedAt: formatDate_(r[13])
+    }
+  };
+}
+
+function formatDate_(val) {
+  if (!val) return '';
+  if (val instanceof Date) {
+    return Utilities.formatDate(val, Session.getScriptTimeZone() || 'GMT', 'yyyy-MM-dd HH:mm:ss');
+  }
+  return String(val);
+}
+
+/**
+ * Validates admin status against Admins sheet.
+ */
+function adminStatus(clientEmail) {
+  setupSheets();
+  const activeUser = Session.getActiveUser();
+  const email = (clientEmail || (activeUser && activeUser.getEmail()) || '').trim();
+  const authorized = isAdmin_(email);
+  return {
+    authorized,
+    email: email || ''
+  };
+}
+
+function isAdmin_(email) {
+  if (!email) return false;
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.ADMINS_SHEET);
+  if (!sheet || sheet.getLastRow() < 2) return false;
+
+  const rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, 3).getValues();
+  const target = normalizeEmail_(email);
+  return rows.some(r => {
+    const adminEmail = normalizeEmail_(r[0]);
+    const active = String(r[2]).trim().toLowerCase();
+    return adminEmail === target && (active === 'true' || active === 'yes' || active === '1');
+  });
+}
+
+/**
+ * QR Redemption Endpoint
+ * Handles:
+ * 1. CHECKIN (inspect -> assign track -> redeem)
+ * 2. FOOD (inspect -> confirm -> redeem)
+ * 3. GOODIE (inspect -> confirm -> redeem)
+ * Uses LockService to prevent double-redemptions.
+ */
+function redeemQR(token, adminEmail, track, confirmAction) {
   setupSheets();
   const lock = LockService.getScriptLock();
   lock.waitLock(15000);
+
   try {
-    const admin = isAdmin_(adminEmail);
-    if (!admin) throw new Error('You are not authorized as an admin.');
+    const cleanToken = String(token || '').trim();
+    if (!cleanToken) {
+      throw new Error('No QR token received.');
+    }
+
+    const authorizedAdmin = isAdmin_(adminEmail);
+    if (!authorizedAdmin) {
+      appendAudit_(adminEmail, 'UNAUTHORIZED_ATTEMPT', 'UNKNOWN', '', '', '', 'FAILED', 'Unauthorized admin email: ' + adminEmail);
+      throw new Error('You are not authorized as an admin.');
+    }
 
     const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.PARTICIPANTS_SHEET);
     const lastRow = sheet.getLastRow();
-    if (lastRow < 2) throw new Error('No participants found.');
+    if (lastRow < 2) throw new Error('No participants registered.');
 
     const rows = sheet.getRange(2, 1, lastRow - 1, PARTICIPANT_HEADERS.length).getValues();
     let index = -1;
     let type = '';
+
     for (let i = 0; i < rows.length; i++) {
       const r = rows[i];
-      if (String(r[4]) === String(token)) { index = i; type = 'CHECKIN'; break; }
-      if (String(r[5]) === String(token)) { index = i; type = 'FOOD'; break; }
-      if (String(r[6]) === String(token)) { index = i; type = 'GOODIE'; break; }
+      if (String(r[4]) === cleanToken) { index = i; type = 'CHECKIN'; break; }
+      if (String(r[5]) === cleanToken) { index = i; type = 'FOOD'; break; }
+      if (String(r[6]) === cleanToken) { index = i; type = 'GOODIE'; break; }
     }
-    if (index < 0) throw new Error('Invalid QR code.');
+
+    if (index < 0) {
+      appendAudit_(adminEmail, 'INVALID_QR', 'UNKNOWN', '', '', '', 'FAILED', 'Unrecognized token: ' + cleanToken);
+      throw new Error('Invalid QR code. Token was not found in the registration system.');
+    }
 
     const r = rows[index];
     const rowNumber = index + 2;
-    let result;
+    const participantId = String(r[0]);
+    const participantName = String(r[1]);
+    const participantPhone = String(r[2] || '');
+    const participantEmail = String(r[3] || '');
 
+    const participantInfo = {
+      id: participantId,
+      name: participantName,
+      email: participantEmail,
+      phone: participantPhone
+    };
+
+    // CHECK-IN QR
     if (type === 'CHECKIN') {
-      if (r[7]) throw new Error('Check-in QR has already been redeemed.');
-      if (!track || CONFIG.TRACKS.indexOf(track) === -1) {
-        return {ok: true, needsTrack: true, type, participant: {id:r[0], name:r[1]}, tracks: CONFIG.TRACKS};
+      if (r[7]) {
+        const checkedInAt = formatDate_(r[11]) || 'earlier';
+        appendAudit_(adminEmail, 'ALREADY_REDEEMED', type, participantId, participantName, r[10] || '', 'REJECTED', 'Check-in already completed at ' + checkedInAt);
+        return {
+          ok: false,
+          alreadyRedeemed: true,
+          type: 'Event Check-in',
+          participant: participantInfo,
+          participantName,
+          participantId,
+          track: r[10] || '',
+          redeemedAt: checkedInAt,
+          message: 'Already Checked In at ' + checkedInAt + (r[10] ? ' (Track: ' + r[10] + ')' : '')
+        };
       }
-      sheet.getRange(rowNumber, 8).setValue(new Date());
-      sheet.getRange(rowNumber, 11).setValue(track);
-      result = {ok:true, type, participantId:r[0], participantName:r[1], track, message:'Check-in completed and track assigned.'};
-    } else if (type === 'FOOD') {
-      if (r[8]) throw new Error('Food QR has already been redeemed.');
-      sheet.getRange(rowNumber, 9).setValue(new Date());
-      result = {ok:true, type, participantId:r[0], participantName:r[1], track:r[10] || '', message:'Food redeemed successfully.'};
-    } else {
-      if (r[9]) throw new Error('Goodie-kit QR has already been redeemed.');
-      sheet.getRange(rowNumber, 10).setValue(new Date());
-      result = {ok:true, type, participantId:r[0], participantName:r[1], track:r[10] || '', message:'Goodie kit redeemed successfully.'};
+
+      // Check-in requires track assignment
+      if (!track || CONFIG.TRACKS.indexOf(track) === -1) {
+        return {
+          ok: true,
+          needsTrack: true,
+          type: 'Event Check-in',
+          participant: participantInfo,
+          tracks: CONFIG.TRACKS
+        };
+      }
+
+      const now = new Date();
+      sheet.getRange(rowNumber, 8).setValue(now); // Checkin Redeemed
+      sheet.getRange(rowNumber, 11).setValue(track); // Track
+      sheet.getRange(rowNumber, 12).setValue(now); // Checked In At
+
+      appendAudit_(adminEmail, 'CHECKIN', type, participantId, participantName, track, 'SUCCESS', 'Checked in with track ' + track);
+      return {
+        ok: true,
+        type: 'Event Check-in',
+        participant: participantInfo,
+        participantId,
+        participantName,
+        track,
+        message: 'Participant successfully checked in and assigned to ' + track + '.'
+      };
     }
 
-    appendAudit_(adminEmail, 'REDEEM', type, r[0], r[1], result.track || r[10] || '', 'SUCCESS', result.message);
-    return result;
+    // FOOD QR
+    if (type === 'FOOD') {
+      if (r[8]) {
+        const redeemedAt = formatDate_(r[12]) || 'earlier';
+        appendAudit_(adminEmail, 'ALREADY_REDEEMED', type, participantId, participantName, r[10] || '', 'REJECTED', 'Food already redeemed at ' + redeemedAt);
+        return {
+          ok: false,
+          alreadyRedeemed: true,
+          type: 'Lunch & Meals',
+          participant: participantInfo,
+          participantName,
+          participantId,
+          redeemedAt,
+          message: 'Food was already redeemed at ' + redeemedAt
+        };
+      }
+
+      // Prompt confirmation if not confirmed yet
+      if (!confirmAction) {
+        return {
+          ok: true,
+          needsConfirmation: true,
+          type: 'Lunch & Meals',
+          participant: participantInfo,
+          status: 'Available'
+        };
+      }
+
+      const now = new Date();
+      sheet.getRange(rowNumber, 9).setValue(now); // Food Redeemed
+      sheet.getRange(rowNumber, 13).setValue(now); // Food Redeemed At
+
+      appendAudit_(adminEmail, 'FOOD_REDEEM', type, participantId, participantName, r[10] || '', 'SUCCESS', 'Food voucher redeemed');
+      return {
+        ok: true,
+        type: 'Lunch & Meals',
+        participant: participantInfo,
+        participantId,
+        participantName,
+        message: 'Food voucher successfully redeemed.'
+      };
+    }
+
+    // GOODIE QR
+    if (type === 'GOODIE') {
+      if (r[9]) {
+        const redeemedAt = formatDate_(r[13]) || 'earlier';
+        appendAudit_(adminEmail, 'ALREADY_REDEEMED', type, participantId, participantName, r[10] || '', 'REJECTED', 'Goodie Kit already redeemed at ' + redeemedAt);
+        return {
+          ok: false,
+          alreadyRedeemed: true,
+          type: 'Swag & Goodie Kit',
+          participant: participantInfo,
+          participantName,
+          participantId,
+          redeemedAt,
+          message: 'Goodie Kit was already redeemed at ' + redeemedAt
+        };
+      }
+
+      if (!confirmAction) {
+        return {
+          ok: true,
+          needsConfirmation: true,
+          type: 'Swag & Goodie Kit',
+          participant: participantInfo,
+          status: 'Available'
+        };
+      }
+
+      const now = new Date();
+      sheet.getRange(rowNumber, 10).setValue(now); // Goodie Redeemed
+      sheet.getRange(rowNumber, 14).setValue(now); // Goodie Redeemed At
+
+      appendAudit_(adminEmail, 'GOODIE_REDEEM', type, participantId, participantName, r[10] || '', 'SUCCESS', 'Goodie kit redeemed');
+      return {
+        ok: true,
+        type: 'Swag & Goodie Kit',
+        participant: participantInfo,
+        participantId,
+        participantName,
+        message: 'Goodie kit successfully redeemed.'
+      };
+    }
+
+    // GOODIE KIT QR
+    if (type === 'GOODIE') {
+      if (r[9]) {
+        const redeemedAt = formatDate_(r[13]) || 'earlier';
+        appendAudit_(adminEmail, 'ALREADY_REDEEMED', type, participantId, participantName, r[10] || '', 'REJECTED', 'Goodie kit already redeemed at ' + redeemedAt);
+        return {
+          ok: false,
+          alreadyRedeemed: true,
+          type: 'Goodie Kit',
+          participantName,
+          participantId,
+          redeemedAt,
+          message: 'Goodie Kit was already redeemed at ' + redeemedAt
+        };
+      }
+
+      // Prompt confirmation if not confirmed yet
+      if (!confirmAction) {
+        return {
+          ok: true,
+          needsConfirmation: true,
+          type: 'Goodie Kit',
+          participant: { id: participantId, name: participantName },
+          status: 'Available'
+        };
+      }
+
+      const now = new Date();
+      sheet.getRange(rowNumber, 10).setValue(now); // Goodie Redeemed
+      sheet.getRange(rowNumber, 14).setValue(now); // Goodie Redeemed At
+
+      appendAudit_(adminEmail, 'GOODIE_REDEEM', type, participantId, participantName, r[10] || '', 'SUCCESS', 'Goodie kit redeemed');
+      return {
+        ok: true,
+        type: 'Goodie Kit',
+        participantId,
+        participantName,
+        message: 'Goodie kit successfully redeemed.'
+      };
+    }
+
+    throw new Error('Unknown QR type.');
   } finally {
     lock.releaseLock();
   }
 }
 
-function isAdmin_(email) {
-  const s = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.ADMINS_SHEET);
-  if (!s || s.getLastRow() < 2) return false;
-  const rows = s.getRange(2, 1, s.getLastRow() - 1, 3).getValues();
-  const target = normalize_(email);
-  return rows.some(r => normalize_(r[0]) === target && String(r[2]).toLowerCase() !== 'false' && String(r[2]).toLowerCase() !== 'no');
-}
-
-function adminStatus(email) {
-  return {authorized: isAdmin_(email), email: email || ''};
-}
-
 function appendAudit_(adminEmail, action, type, participantId, name, track, result, details) {
-  const s = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.AUDIT_SHEET);
-  s.appendRow([new Date(), adminEmail, action, type, participantId, name, track, result, details]);
-}
-
-function resetParticipant(participantId) {
-  const lock = LockService.getScriptLock();
-  lock.waitLock(15000);
   try {
-    const obj = findParticipantRow_(participantId);
-    if (!obj) throw new Error('Participant not found.');
-    const r = obj.values;
-    r[4] = newToken_('CHK');
-    r[5] = newToken_('FOD');
-    r[6] = newToken_('GDK');
-    r[7] = '';
-    r[8] = '';
-    r[9] = '';
-    r[10] = '';
-    r[11] = '';
-    r[12] = '';
-    r[13] = '';
-    obj.sheet.getRange(obj.rowNumber, 1, 1, PARTICIPANT_HEADERS.length).setValues([r]);
-    return true;
-  } finally {
-    lock.releaseLock();
+    const s = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.AUDIT_SHEET);
+    if (s) {
+      s.appendRow([new Date(), adminEmail || '', action, type, participantId, name, track, result, details]);
+    }
+  } catch (e) {
+    console.error('Failed to write audit log: ' + e.message);
   }
 }
