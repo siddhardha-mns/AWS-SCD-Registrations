@@ -1,243 +1,1807 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <base target="_top">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Event QR Portal</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>AWS Community Day — Event QR Portal</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-  <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+  <!-- Fast, Battle-tested clientside QR Decoder -->
+  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800;900&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <style>
-    :root{--bg:#f5f7fb;--card:#fff;--ink:#121826;--muted:#667085;--line:#e4e7ec;--accent:#111827;--ok:#067647;--danger:#b42318;--gold:#b54708}
-    *{box-sizing:border-box}body{margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,sans-serif;background:var(--bg);color:var(--ink)}
-    .wrap{max-width:1050px;margin:auto;padding:28px 18px 60px}.brand{font-weight:800;font-size:20px}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:28px}
-    .card{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:24px;box-shadow:0 10px 30px rgba(16,24,40,.05)}
-    .hero{padding:34px}.hero h1{font-size:36px;margin:0 0 8px}.muted{color:var(--muted)}label{display:block;font-weight:700;font-size:14px;margin:18px 0 8px}
-    input,select,button{width:100%;padding:13px 14px;border-radius:12px;border:1px solid #d0d5dd;font-size:15px}
-    button{background:var(--accent);color:white;border:0;font-weight:750;cursor:pointer}button.secondary{background:#eef2f6;color:#111827}button:disabled{opacity:.5;cursor:not-allowed}
-    .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:20px}.qr-card{text-align:center}.qr{display:flex;justify-content:center;min-height:190px;align-items:center;margin:16px 0}
-    .pill{display:inline-block;padding:6px 10px;border-radius:999px;background:#f2f4f7;font-size:12px;font-weight:800}.pill.ok{background:#ecfdf3;color:var(--ok)}.pill.pending{background:#fff7ed;color:var(--gold)}
-    .notice{padding:12px 14px;border-radius:12px;margin:12px 0;display:none}.notice.error{display:block;background:#fef3f2;color:var(--danger)}.notice.ok{display:block;background:#ecfdf3;color:var(--ok)}
-    .login{max-width:540px;margin:70px auto}.row{display:grid;grid-template-columns:1fr 1fr;gap:12px}.hidden{display:none!important}.scanner{max-width:600px;margin:auto}.result{text-align:center;margin-top:18px}.big{font-size:24px;font-weight:800}
-    .admin-nav{display:flex;gap:8px;flex-wrap:wrap}.admin-nav button{width:auto}.small{font-size:13px}.modal{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:20px;z-index:10}.modal .card{max-width:420px;width:100%}
-    @media(max-width:760px){.grid{grid-template-columns:1fr}.hero h1{font-size:28px}.row{grid-template-columns:1fr}}
+    :root {
+      --bg: #090d16;
+      --card-bg: rgba(18, 26, 44, 0.75);
+      --card-border: rgba(255, 255, 255, 0.08);
+      --card-border-hover: rgba(99, 102, 241, 0.35);
+      --ink: #f8fafc;
+      --muted: #94a3b8;
+      --primary: #4f46e5;
+      --primary-gradient: linear-gradient(135deg, #6366f1 0%, #4338ca 100%);
+      --accent-aws: linear-gradient(135deg, #ff9900 0%, #ff6600 100%);
+      --ok: #10b981;
+      --ok-bg: rgba(16, 185, 129, 0.12);
+      --ok-border: rgba(16, 185, 129, 0.25);
+      --warn: #f59e0b;
+      --warn-bg: rgba(245, 158, 11, 0.12);
+      --warn-border: rgba(245, 158, 11, 0.25);
+      --danger: #ef4444;
+      --danger-bg: rgba(239, 68, 68, 0.12);
+      --danger-border: rgba(239, 68, 68, 0.25);
+      --radius: 20px;
+      --radius-sm: 10px;
+      --shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.5), 0 0 0 1px var(--card-border);
+    }
+
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    
+    body {
+      margin: 0;
+      font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      background-image: 
+        radial-gradient(ellipse 80% 50% at 50% -20%, rgba(99, 102, 241, 0.25), transparent),
+        radial-gradient(ellipse 60% 40% at 100% 60%, rgba(255, 153, 0, 0.08), transparent),
+        radial-gradient(ellipse 50% 50% at 0% 80%, rgba(59, 130, 246, 0.1), transparent);
+      background-attachment: fixed;
+      color: var(--ink);
+      line-height: 1.5;
+      min-height: 100vh;
+    }
+
+    .wrap {
+      max-width: 1060px;
+      margin: 0 auto;
+      padding: 24px 20px 80px;
+    }
+
+    /* Top Navigation Bar */
+    .top-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 28px;
+      padding: 12px 18px;
+      background: rgba(18, 26, 44, 0.6);
+      backdrop-filter: blur(20px);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+    }
+    .brand {
+      font-family: 'Outfit', sans-serif;
+      font-weight: 800;
+      font-size: 17px;
+      letter-spacing: -0.01em;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .brand-icon {
+      width: 28px;
+      height: 28px;
+      background: var(--accent-aws);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #000;
+      font-weight: 900;
+      font-size: 13px;
+      box-shadow: 0 4px 12px rgba(255, 153, 0, 0.3);
+    }
+    .brand-badge {
+      background: rgba(99, 102, 241, 0.15);
+      border: 1px solid rgba(99, 102, 241, 0.3);
+      color: #a5b4fc;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 3px 9px;
+      border-radius: 999px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    /* Cards */
+    .card {
+      background: var(--card-bg);
+      backdrop-filter: blur(20px);
+      border: 1px solid var(--card-border);
+      border-radius: var(--radius);
+      padding: 28px;
+      box-shadow: var(--shadow);
+    }
+
+    .login-container {
+      max-width: 480px;
+      margin: 32px auto;
+      position: relative;
+    }
+
+    h1, h2, h3 {
+      font-family: 'Outfit', sans-serif;
+      margin: 0 0 10px;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+    }
+    h2 { font-size: 24px; color: #ffffff; }
+    h3 { font-size: 18px; }
+    p { margin: 0 0 18px; }
+    .muted { color: var(--muted); font-size: 14px; line-height: 1.6; }
+
+    /* Form Fields */
+    .input-group {
+      margin-bottom: 18px;
+      position: relative;
+    }
+    label {
+      display: block;
+      font-weight: 600;
+      font-size: 12px;
+      margin-bottom: 7px;
+      color: #94a3b8;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .input-wrapper {
+      position: relative;
+      display: flex;
+      align-items: center;
+    }
+    .input-icon {
+      position: absolute;
+      left: 14px;
+      color: #64748b;
+      font-size: 15px;
+      pointer-events: none;
+    }
+    input, select {
+      width: 100%;
+      padding: 12px 14px 12px 40px;
+      border-radius: var(--radius-sm);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      font-size: 14px;
+      font-family: inherit;
+      color: var(--ink);
+      background: rgba(10, 15, 28, 0.7);
+      transition: all 0.2s ease;
+    }
+    input::placeholder { color: #475569; }
+    input:focus, select:focus {
+      outline: none;
+      border-color: #6366f1;
+      background: rgba(15, 23, 42, 0.95);
+      box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.25);
+    }
+
+    /* Custom Autocomplete Dropdown */
+    .autocomplete-box { position: relative; }
+    .autocomplete-dropdown {
+      position: absolute;
+      top: calc(100% + 4px);
+      left: 0;
+      right: 0;
+      background: #0f172a;
+      border: 1px solid rgba(99, 102, 241, 0.35);
+      border-radius: 12px;
+      box-shadow: 0 20px 40px rgba(0,0,0,0.6);
+      max-height: 240px;
+      overflow-y: auto;
+      z-index: 100;
+      display: none;
+    }
+    .autocomplete-dropdown.open { display: block; }
+    .suggestion-item {
+      padding: 10px 14px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+      transition: background 0.15s;
+    }
+    .suggestion-item:last-child { border-bottom: none; }
+    .suggestion-item:hover, .suggestion-item.active {
+      background: rgba(99, 102, 241, 0.18);
+    }
+    .suggestion-avatar {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #6366f1, #3b82f6);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 11px;
+      color: #fff;
+      flex-shrink: 0;
+    }
+    .suggestion-name {
+      font-weight: 600;
+      font-size: 13px;
+      color: #f1f5f9;
+    }
+
+    /* Button System */
+    button {
+      padding: 10px 20px;
+      border-radius: var(--radius-sm);
+      border: none;
+      background: var(--primary-gradient);
+      color: #ffffff;
+      font-size: 14px;
+      font-weight: 700;
+      font-family: inherit;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+      box-shadow: 0 4px 15px rgba(99, 102, 241, 0.3);
+    }
+    button:hover:not(:disabled) {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 20px rgba(99, 102, 241, 0.45);
+    }
+    button:active:not(:disabled) { transform: translateY(0); }
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none;
+    }
+    button.secondary {
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      color: #cbd5e1;
+      box-shadow: none;
+    }
+    button.secondary:hover:not(:disabled) {
+      background: rgba(255, 255, 255, 0.14);
+      color: #ffffff;
+    }
+
+    .btn-action-center {
+      display: flex;
+      justify-content: center;
+      margin-top: 14px;
+    }
+    .btn-verify {
+      min-width: 200px;
+      max-width: 280px;
+      padding: 12px 24px;
+      font-size: 14px;
+    }
+
+    /* Selected Pill */
+    .selected-card {
+      background: rgba(99, 102, 241, 0.1);
+      border: 1px solid rgba(99, 102, 241, 0.25);
+      padding: 10px 14px;
+      border-radius: var(--radius-sm);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
+    .selected-info {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .selected-name {
+      font-weight: 700;
+      color: #e0e7ff;
+      font-size: 14px;
+    }
+    .change-btn {
+      background: transparent;
+      border: none;
+      color: #818cf8;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      padding: 3px 8px;
+      border-radius: 6px;
+      box-shadow: none;
+    }
+    .change-btn:hover {
+      background: rgba(99, 102, 241, 0.2);
+      color: #ffffff;
+    }
+
+    /* Notices & Alerts */
+    .notice {
+      padding: 12px 16px;
+      border-radius: var(--radius-sm);
+      margin: 16px 0 0;
+      font-size: 13px;
+      display: none;
+      line-height: 1.5;
+      font-weight: 500;
+    }
+    .notice.error {
+      display: block;
+      background: var(--danger-bg);
+      border: 1px solid var(--danger-border);
+      color: #fca5a5;
+    }
+    .notice.ok {
+      display: block;
+      background: var(--ok-bg);
+      border: 1px solid var(--ok-border);
+      color: #6ee7b7;
+    }
+
+    /* Status Pills */
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 9999px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+    .pill.ok {
+      background: var(--ok-bg);
+      border: 1px solid var(--ok-border);
+      color: #34d399;
+    }
+    .pill.pending {
+      background: var(--warn-bg);
+      border: 1px solid var(--warn-border);
+      color: #fbbf24;
+    }
+    .pill.neutral {
+      background: rgba(100, 116, 139, 0.15);
+      border: 1px solid rgba(100, 116, 139, 0.3);
+      color: #94a3b8;
+    }
+
+    /* Dashboard Layout */
+    .dashboard-hero {
+      margin-bottom: 24px;
+      background: linear-gradient(135deg, rgba(30, 27, 75, 0.6) 0%, rgba(15, 23, 42, 0.85) 100%);
+      border: 1px solid rgba(99, 102, 241, 0.25);
+      position: relative;
+      overflow: hidden;
+    }
+    .dashboard-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      flex-wrap: wrap;
+      gap: 16px;
+    }
+    .participant-id-chip {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 12px;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      color: #cbd5e1;
+      padding: 3px 10px;
+      border-radius: 6px;
+      font-weight: 600;
+    }
+    .college-tag {
+      font-size: 13px;
+      color: #94a3b8;
+      margin-top: 4px;
+    }
+    .participant-meta-row {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+      margin-top: 10px;
+    }
+
+    /* QR Grid & Ticket Cards */
+    .qr-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 20px;
+      margin-top: 16px;
+    }
+    .qr-card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: var(--radius);
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      position: relative;
+      transition: transform 0.2s, border-color 0.2s;
+    }
+    .qr-card:hover {
+      transform: translateY(-2px);
+      border-color: var(--card-border-hover);
+    }
+    .qr-header {
+      width: 100%;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 14px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .qr-title {
+      font-family: 'Outfit', sans-serif;
+      font-weight: 800;
+      font-size: 13px;
+      letter-spacing: 0.04em;
+      color: #cbd5e1;
+    }
+    .qr-wrapper {
+      background: #ffffff;
+      padding: 12px;
+      border-radius: 14px;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.4);
+      margin: 8px 0 10px;
+      display: inline-flex;
+      justify-content: center;
+      align-items: center;
+    }
+    .pass-code-banner {
+      background: rgba(99, 102, 241, 0.12);
+      border: 1px solid rgba(99, 102, 241, 0.25);
+      border-radius: 8px;
+      padding: 6px 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 4px 0 10px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 13px;
+      font-weight: 700;
+      color: #e0e7ff;
+    }
+    .copy-btn {
+      background: transparent;
+      border: none;
+      color: #818cf8;
+      font-size: 11px;
+      cursor: pointer;
+      padding: 2px 6px;
+      border-radius: 4px;
+      box-shadow: none;
+    }
+    .copy-btn:hover {
+      background: rgba(99, 102, 241, 0.2);
+      color: #fff;
+    }
+    .qr-desc {
+      font-size: 12px;
+      color: #94a3b8;
+      line-height: 1.5;
+      margin-top: auto;
+    }
+    .download-qr-btn {
+      margin-top: 10px;
+      padding: 6px 12px;
+      font-size: 11px;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 6px;
+      color: #cbd5e1;
+      box-shadow: none;
+    }
+    .download-qr-btn:hover {
+      background: rgba(99, 102, 241, 0.2);
+      color: #ffffff;
+    }
+
+    /* Admin Scanner View */
+    .scanner-view {
+      max-width: 580px;
+      margin: 0 auto;
+    }
+    .scanner-box {
+      width: 100%;
+      border-radius: 16px;
+      overflow: hidden;
+      margin-top: 14px;
+      border: 2px solid rgba(99, 102, 241, 0.3);
+      background: #000;
+      position: relative;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 280px;
+    }
+    #scannerVideo {
+      width: 100%;
+      height: 100%;
+      max-height: 360px;
+      object-fit: cover;
+      display: block;
+    }
+    #scannerCanvas {
+      display: none;
+    }
+    .scanner-overlay {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .scanner-reticle {
+      width: 220px;
+      height: 220px;
+      border: 2px solid #6366f1;
+      border-radius: 18px;
+      position: relative;
+      box-shadow: 0 0 0 4000px rgba(0, 0, 0, 0.45);
+    }
+    .scanner-reticle::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, #38bdf8, transparent);
+      box-shadow: 0 0 10px #38bdf8;
+      animation: laserSweep 2s infinite ease-in-out;
+    }
+    @keyframes laserSweep {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(216px); }
+    }
+    .scanner-controls {
+      display: flex;
+      justify-content: center;
+      gap: 10px;
+      margin-top: 14px;
+      flex-wrap: wrap;
+    }
+    .manual-token-box {
+      margin-top: 20px;
+      padding-top: 16px;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    /* Track Capacity Panel */
+    .track-mgmt-card {
+      background: var(--card-bg);
+      backdrop-filter: blur(20px);
+      border: 1px solid var(--card-border);
+      border-radius: var(--radius);
+      padding: 20px;
+      box-shadow: var(--shadow);
+      margin-top: 16px;
+    }
+    .track-mgmt-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+    .track-mgmt-header h3 {
+      margin: 0;
+      font-size: 16px;
+      color: #e0e7ff;
+    }
+    .track-stats-grid {
+      display: grid;
+      gap: 12px;
+    }
+    .track-stat-row {
+      background: rgba(15, 23, 42, 0.6);
+      border: 1px solid rgba(255, 255, 255, 0.07);
+      border-radius: 12px;
+      padding: 12px 14px;
+    }
+    .track-stat-row.track-full {
+      border-color: rgba(239, 68, 68, 0.3);
+      background: rgba(239, 68, 68, 0.06);
+    }
+    .track-stat-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .track-stat-name {
+      font-weight: 800;
+      font-size: 14px;
+      font-family: 'Outfit', sans-serif;
+      color: #e0e7ff;
+    }
+    .track-count-chip {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 12px;
+      font-weight: 700;
+      padding: 3px 10px;
+      border-radius: 6px;
+      background: rgba(99, 102, 241, 0.15);
+      border: 1px solid rgba(99, 102, 241, 0.3);
+      color: #a5b4fc;
+    }
+    .track-count-chip.full {
+      background: rgba(239, 68, 68, 0.15);
+      border-color: rgba(239, 68, 68, 0.35);
+      color: #fca5a5;
+    }
+    .track-progress-bar {
+      width: 100%;
+      height: 6px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.08);
+      overflow: hidden;
+      margin-bottom: 10px;
+    }
+    .track-progress-fill {
+      height: 100%;
+      border-radius: 999px;
+      background: linear-gradient(90deg, #6366f1, #38bdf8);
+      transition: width 0.4s ease;
+    }
+    .track-progress-fill.warn { background: linear-gradient(90deg, #f59e0b, #f97316); }
+    .track-progress-fill.danger { background: linear-gradient(90deg, #ef4444, #f97316); }
+    .track-limit-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: #64748b;
+    }
+    .track-limit-row label { text-transform: none; letter-spacing: 0; font-size: 12px; margin: 0; color: #94a3b8; font-weight: 600; }
+    .track-limit-input {
+      width: 72px;
+      padding: 4px 8px;
+      font-size: 13px;
+      border-radius: 6px;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(10,15,28,0.8);
+      color: #e0e7ff;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-weight: 700;
+      text-align: center;
+    }
+    .track-limit-input:focus {
+      border-color: #6366f1;
+      outline: none;
+      box-shadow: 0 0 0 2px rgba(99,102,241,0.25);
+    }
+    .track-save-btn {
+      padding: 4px 12px;
+      font-size: 11px;
+      background: rgba(99, 102, 241, 0.2);
+      border: 1px solid rgba(99, 102, 241, 0.4);
+      color: #a5b4fc;
+      border-radius: 6px;
+      box-shadow: none;
+      cursor: pointer;
+      font-weight: 700;
+    }
+    .track-save-btn:hover { background: rgba(99, 102, 241, 0.35); color: #fff; }
+
+    /* Modal System & Popup */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.8);
+      backdrop-filter: blur(10px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      padding: 16px;
+    }
+    .modal-card {
+      background: #0f172a;
+      border: 1px solid rgba(99, 102, 241, 0.35);
+      border-radius: 20px;
+      padding: 24px;
+      max-width: 480px;
+      width: 100%;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.8), 0 0 30px rgba(99, 102, 241, 0.2);
+      animation: modalSlide 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    @keyframes modalSlide {
+      from { opacity: 0; transform: scale(0.95) translateY(10px); }
+      to { opacity: 1; transform: scale(1) translateY(0); }
+    }
+    .modal-participant-card {
+      background: rgba(30, 41, 59, 0.7);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 14px;
+      padding: 16px;
+      margin: 14px 0 16px;
+    }
+    .modal-actions {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      gap: 10px;
+      margin-top: 18px;
+    }
+    .modal-actions button {
+      padding: 10px 20px;
+      font-size: 13px;
+      width: auto !important;
+      min-width: 90px;
+      max-width: 220px;
+    }
+
+    .hidden { display: none !important; }
+
+    @media (max-width: 820px) {
+      .qr-grid { grid-template-columns: 1fr; }
+      .wrap { padding: 16px 14px 60px; }
+      .card { padding: 20px; }
+      .top-bar { flex-direction: column; gap: 10px; align-items: flex-start; }
+    }
   </style>
 </head>
 <body>
+
 <div class="wrap">
-  <div class="top"><div class="brand">EVENT QR PORTAL</div><div id="topRight"></div></div>
+  <!-- TOP NAVIGATION -->
+  <header class="top-bar">
+    <div class="brand">
+      <div class="brand-icon">⚡</div>
+      <span>AWS COMMUNITY DAY</span>
+      <span class="brand-badge"><?= page === 'admin' ? 'Admin Scanner' : 'Participant' ?></span>
+    </div>
+    <div id="topRight"></div>
+  </header>
 
   <? if (page === 'participant') { ?>
-  <section id="loginView" class="login card">
-    <h1>Participant Login</h1>
-    <p class="muted">Select your registered name. We will send a one-time OTP to the email address in your registration.</p>
-    <label>Your name</label>
-    <input id="name" list="nameList" autocomplete="name" placeholder="Start typing your name">
-    <datalist id="nameList"></datalist>
-    <button id="sendOtpBtn" onclick="sendOtp()">Send OTP to my email</button>
-    <div id="loginMsg" class="notice"></div>
+  <!-- ================= PARTICIPANT LOGIN ================= -->
+  <section id="loginSection" class="login-container card">
+    <h2>Access Event Passes</h2>
+    <p class="muted">Search your registered name, then enter your registered phone or email to view your event QR tickets.</p>
 
-    <div id="otpBox" class="hidden" style="margin-top:18px">
-      <label>Enter OTP</label>
-      <input id="otp" inputmode="numeric" maxlength="6" autocomplete="one-time-code" placeholder="6-digit OTP">
-      <p id="otpHint" class="small muted"></p>
-      <button onclick="verifyOtpCode()">Verify OTP &amp; Access QRs</button>
-      <button class="secondary" onclick="sendOtp()" style="margin-top:8px">Resend OTP</button>
+    <!-- Search Name Input with Interactive Dropdown -->
+    <div class="input-group autocomplete-box">
+      <label for="nameSearch">🔍 1. Registered Name</label>
+      <div class="input-wrapper">
+        <span class="input-icon">👤</span>
+        <input id="nameSearch" type="text" autocomplete="off" placeholder="Start typing your name...">
+      </div>
+      <div id="autocompleteDropdown" class="autocomplete-dropdown"></div>
     </div>
+
+    <!-- Selected Name Box -->
+    <div id="selectedNameBox" class="hidden">
+      <div class="selected-card">
+        <div class="selected-info">
+          <span style="font-size: 16px;">✅</span>
+          <div>
+            <div style="font-size: 10px; text-transform: uppercase; color: #818cf8; font-weight: 700; letter-spacing: 0.05em;">Selected Participant</div>
+            <div id="selectedNameDisplay" class="selected-name"></div>
+          </div>
+        </div>
+        <button type="button" class="change-btn" onclick="clearSelectedName()">Change</button>
+      </div>
+
+      <!-- Credential Input -->
+      <div class="input-group">
+        <label for="credential">🔒 2. Registered Email or Phone</label>
+        <div class="input-wrapper">
+          <span class="input-icon">📱</span>
+          <input id="credential" placeholder="e.g. 9876543210 or your@email.com" autocomplete="username">
+        </div>
+        <p class="muted" style="font-size: 11px; margin: 6px 0 0; color: #64748b;">
+          Matches either registered 10-digit mobile number or email address.
+        </p>
+      </div>
+
+      <!-- Compact, Centered Verify Button -->
+      <div class="btn-action-center">
+        <button id="verifyBtn" class="btn-verify" onclick="submitVerification()">
+          <span>Verify &amp; Continue</span>
+          <span>→</span>
+        </button>
+      </div>
+    </div>
+
+    <div id="loginAlert" class="notice"></div>
   </section>
 
-  <section id="participantView" class="hidden">
-    <div class="hero card">
-      <div class="pill ok">AUTHENTICATED</div>
-      <h1 id="welcome"></h1>
-      <p class="muted">Keep these three QR codes ready. Each one can be redeemed only once.</p>
-      <div id="trackInfo"></div>
+  <!-- ================= PARTICIPANT DASHBOARD ================= -->
+  <section id="dashboardSection" class="hidden">
+    <div class="card dashboard-hero">
+      <div class="dashboard-header">
+        <div>
+          <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #818cf8; font-weight: 700; margin-bottom: 2px;">Participant Pass</div>
+          <h1 id="participantName" style="font-size: 28px; color: #ffffff;">Welcome</h1>
+          <div id="participantCollege" class="college-tag"></div>
+          <div class="participant-meta-row">
+            <span class="participant-id-chip">ID: <span id="participantId"></span></span>
+            <span id="participantTicketType" class="pill neutral" style="font-size:12px;"></span>
+            <span id="trackBadge" class="pill pending">Track: Pending check-in</span>
+          </div>
+        </div>
+        <div>
+          <button class="secondary" onclick="logOutParticipant()" style="padding:8px 14px;font-size:12px;border-radius:8px;">
+            Switch Participant
+          </button>
+        </div>
+      </div>
     </div>
-    <div id="participantMsg" class="notice"></div>
-    <div class="grid">
-      <div class="qr-card card"><div class="pill">01 · CHECK-IN</div><div id="qr1" class="qr"></div><div id="checkStatus"></div><p class="small muted">Show this to the check-in desk.</p></div>
-      <div class="qr-card card"><div class="pill">02 · FOOD</div><div id="qr2" class="qr"></div><div id="foodStatus"></div><p class="small muted">Show this at the food counter.</p></div>
-      <div class="qr-card card"><div class="pill">03 · GOODIE KIT</div><div id="qr3" class="qr"></div><div id="goodieStatus"></div><p class="small muted">Show this at the goodie-kit desk.</p></div>
+
+    <div id="dashAlert" class="notice"></div>
+
+    <!-- 3 PASS CARDS (With Clean Pass Codes & QR) -->
+    <div class="qr-grid">
+      <!-- 01. CHECK-IN PASS -->
+      <div class="qr-card">
+        <div class="qr-header">
+          <div class="qr-title">01 · EVENT CHECK-IN</div>
+          <div id="checkinBadge" class="pill pending">Not Checked In</div>
+        </div>
+        <div id="checkinQr" class="qr-wrapper"></div>
+        <div class="pass-code-banner">
+          <span>CODE: <strong id="checkinCodeText"></strong></span>
+          <button type="button" class="copy-btn" onclick="copyText('checkinCodeText')">📋 Copy</button>
+        </div>
+        <div id="checkinDetail" class="qr-desc">Show this QR code at the entrance desk to complete check-in and get your track allocation.</div>
+        <button type="button" class="download-qr-btn" onclick="saveQrImage('checkinQr', 'Checkin-QR')">📥 Save QR</button>
+      </div>
+
+      <!-- 02. LUNCH & FOOD PASS -->
+      <div class="qr-card">
+        <div class="qr-header">
+          <div class="qr-title">02 · LUNCH &amp; MEALS</div>
+          <div id="foodBadge" class="pill pending">Not Redeemed</div>
+        </div>
+        <div id="foodQr" class="qr-wrapper"></div>
+        <div class="pass-code-banner">
+          <span>CODE: <strong id="foodCodeText"></strong></span>
+          <button type="button" class="copy-btn" onclick="copyText('foodCodeText')">📋 Copy</button>
+        </div>
+        <div id="foodDetail" class="qr-desc">Show this QR code at the catering counter to redeem your lunch &amp; refreshments.</div>
+        <button type="button" class="download-qr-btn" onclick="saveQrImage('foodQr', 'Food-QR')">📥 Save QR</button>
+      </div>
+
+      <!-- 03. GOODIE & SWAG KIT -->
+      <div class="qr-card">
+        <div class="qr-header">
+          <div class="qr-title">03 · SWAG &amp; GOODIES</div>
+          <div id="goodieBadge" class="pill pending">Not Redeemed</div>
+        </div>
+        <div id="goodieQr" class="qr-wrapper"></div>
+        <div class="pass-code-banner">
+          <span>CODE: <strong id="goodieCodeText"></strong></span>
+          <button type="button" class="copy-btn" onclick="copyText('goodieCodeText')">📋 Copy</button>
+        </div>
+        <div id="goodieDetail" class="qr-desc">Show this QR code at the kit distribution desk to collect your event swag &amp; kit.</div>
+        <button type="button" class="download-qr-btn" onclick="saveQrImage('goodieQr', 'GoodieKit-QR')">📥 Save QR</button>
+      </div>
     </div>
   </section>
   <? } else { ?>
-  <section id="adminLogin" class="login card">
-    <h1>Admin Scanner</h1>
-    <p class="muted">This scanner is restricted to emails listed in the <b>Admins</b> sheet.</p>
-    <button onclick="checkAdmin()">Continue as Google account</button>
-    <div id="adminMsg" class="notice"></div>
-  </section>
 
-  <section id="adminView" class="hidden">
-    <div class="hero card">
-      <div class="pill ok">ADMIN</div>
-      <h1>QR Redemption Desk</h1>
-      <p class="muted">Scan a participant QR. Check-in scans require track assignment before redemption.</p>
-      <div class="admin-nav">
-        <button onclick="startScanner()">Start camera</button>
-        <button class="secondary" onclick="stopScanner()">Stop camera</button>
+  <!-- ================= ADMIN SCANNER ================= -->
+  <section id="adminAuthSection" class="login-container card">
+    <h2>Admin Scanner Desk</h2>
+    <p class="muted">Access is restricted to authorized volunteer &amp; organizer email addresses listed in the <b>Admins</b> sheet.</p>
+    
+    <div class="input-group">
+      <label for="adminEmailInput">Admin Email Address</label>
+      <div class="input-wrapper">
+        <span class="input-icon">✉️</span>
+        <input id="adminEmailInput" type="email" placeholder="admin@example.com">
       </div>
     </div>
-    <div class="card scanner" style="margin-top:18px">
-      <div id="reader"></div>
-      <div id="scanMsg" class="notice"></div>
-      <div id="scanResult" class="result"></div>
+    
+    <div class="btn-action-center">
+      <button onclick="loginAdmin()" style="min-width:180px;">Sign In as Admin</button>
+    </div>
+    <div id="adminAuthAlert" class="notice"></div>
+  </section>
+
+  <section id="adminScannerSection" class="scanner-view hidden">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <div>
+          <h2 style="font-size:20px;margin:0;">QR Redemption Desk</h2>
+          <span class="pill ok" style="margin-top:4px;">Admin: <span id="activeAdminDisplay"></span></span>
+        </div>
+        <button class="secondary" onclick="logOutAdmin()" style="padding:6px 12px;font-size:12px;border-radius:8px;">Sign Out</button>
+      </div>
+
+      <!-- Scanner Controls -->
+      <div class="scanner-controls">
+        <button id="startCamBtn" onclick="startScanner()">📷 Start Live Scanner</button>
+        <button id="stopCamBtn" class="secondary hidden" onclick="stopScanner()">⏹ Stop Camera</button>
+        <button id="switchCamBtn" class="secondary hidden" onclick="toggleCamera()">🔄 Flip Camera</button>
+        
+        <label for="qrFileInput" class="secondary" style="margin:0;padding:10px 16px;border-radius:var(--radius-sm);font-size:14px;font-weight:700;display:inline-flex;align-items:center;gap:6px;cursor:pointer;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.12);color:#cbd5e1;">
+          🖼️ Scan from Photo / Image
+        </label>
+        <input id="qrFileInput" type="file" accept="image/*" style="display:none;" onchange="scanQrFromFile(this)">
+      </div>
+
+      <!-- Live Video Viewfinder -->
+      <div id="scannerContainer" class="scanner-box hidden">
+        <video id="scannerVideo" autoplay muted playsinline></video>
+        <canvas id="scannerCanvas"></canvas>
+        <div class="scanner-overlay">
+          <div class="scanner-reticle"></div>
+        </div>
+      </div>
+
+      <div id="scanStatusAlert" class="notice"></div>
+      <div id="scanResultBox" style="margin-top:14px;text-align:center;"></div>
+
+      <!-- Manual Token Entry -->
+      <div class="manual-token-box">
+        <label for="manualTokenInput" style="font-size:11px;color:#94a3b8;">Manual Pass Code / Registration ID Entry</label>
+        <div style="display:flex;gap:8px;margin-top:6px;">
+          <input id="manualTokenInput" placeholder="Enter code e.g. IND-001-CHK or IND-001..." style="padding:10px 12px;font-size:13px;">
+          <button type="button" onclick="submitManualToken()" style="white-space:nowrap;padding:10px 16px;font-size:13px;">Redeem</button>
+        </div>
+      </div>
     </div>
   </section>
 
-  <div id="trackModal" class="modal hidden">
-    <div class="card">
-      <h2>Assign track</h2>
-      <p id="trackParticipant" class="muted"></p>
-      <label>Track</label>
-      <select id="trackSelect">
-        <? for (var i=0; i<tracks.length; i++) { ?><option><?= tracks[i] ?></option><? } ?>
-      </select>
-      <button onclick="confirmTrack()">Confirm check-in</button>
-      <button class="secondary" onclick="closeTrackModal()" style="margin-top:8px">Cancel</button>
+  <!-- ================= TRACK CAPACITY MANAGEMENT ================= -->
+  <div id="trackMgmtPanel" class="scanner-view hidden">
+    <div class="track-mgmt-card">
+      <div class="track-mgmt-header">
+        <div>
+          <h3>🎯 Track Capacity</h3>
+          <div style="font-size:11px;color:#64748b;margin-top:2px;">Set limits per track · 0 = unlimited</div>
+        </div>
+        <button class="secondary" onclick="loadTrackStats()" style="padding:6px 12px;font-size:12px;border-radius:8px;">↻ Refresh</button>
+      </div>
+      <div id="trackStatsGrid" class="track-stats-grid">
+        <div style="text-align:center;color:#64748b;padding:20px;font-size:13px;">Loading track data...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= POPUP MODAL FOR SCAN VERIFICATION & REDEMPTION ================= -->
+  <div id="scanPopupModal" class="modal-backdrop hidden">
+    <div class="modal-card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <h3 id="popupPassType" style="margin:0;color:#e0e7ff;font-size:18px;"></h3>
+        <span id="popupStatusBadge" class="pill ok"></span>
+      </div>
+
+      <!-- Rich Participant Info from Spreadsheet -->
+      <div class="modal-participant-card">
+        <div style="font-size:11px;text-transform:uppercase;color:#818cf8;font-weight:700;letter-spacing:0.04em;">Participant Record</div>
+        <div id="popupParticipantName" style="font-size:20px;font-weight:800;color:#ffffff;margin:4px 0;"></div>
+        <div id="popupCollege" style="font-size:13px;color:#94a3b8;margin-bottom:8px;"></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;font-size:12px;">
+          <span class="participant-id-chip">ID: <span id="popupParticipantId"></span></span>
+          <span id="popupTicketType" class="pill neutral"></span>
+          <span id="popupRegType" class="pill neutral"></span>
+        </div>
+        <div id="popupContactInfo" style="font-size:12px;color:#64748b;margin-top:8px;"></div>
+      </div>
+
+      <!-- Action Area for Checkin (Track Assign) -->
+      <div id="popupTrackSection" class="hidden">
+        <label for="popupTrackSelect" style="display:block;font-size:11px;color:#818cf8;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:8px;">Assign Track</label>
+        <select id="popupTrackSelect" style="margin-bottom:6px;"></select>
+        <div id="popupTrackCapacityHint" style="font-size:11px;color:#64748b;margin-bottom:8px;"></div>
+      </div>
+
+      <!-- Message Area -->
+      <div id="popupMessage" style="font-size:13px;margin-top:8px;color:#cbd5e1;line-height:1.4;"></div>
+
+      <!-- Action Buttons -->
+      <div class="modal-actions">
+        <button id="popupCancelBtn" class="secondary" onclick="closePopupModal()">Cancel</button>
+        <button id="popupConfirmBtn" onclick="executePopupAction()">Confirm Action</button>
+      </div>
     </div>
   </div>
   <? } ?>
 </div>
 
 <script>
-let sessionId = null;
-let scanner = null;
-let lastToken = '';
-let pendingToken = '';
-let adminEmail = '';
+let currentSessionId = null;
+let currentAdminEmail = '';
+let videoStream = null;
+let scanAnimationId = null;
+let currentFacingMode = 'environment';
+let lastScannedToken = '';
+let currentPopupData = null;
 
-function msg(id,text,type='error'){
-  const el=document.getElementById(id); if(!el)return;
-  el.className='notice '+type; el.textContent=text;
+function showAlert(elementId, text, type = 'error') {
+  const el = document.getElementById(elementId);
+  if (!el) return;
+  el.className = 'notice ' + type;
+  el.textContent = text;
 }
-function clearMsg(id){const el=document.getElementById(id);if(el)el.className='notice';}
+
+function clearAlert(elementId) {
+  const el = document.getElementById(elementId);
+  if (el) el.className = 'notice';
+}
+
+function escapeHtml(s) {
+  return String(s || '').replace(/[&<>"']/g, m => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;'
+  }[m]));
+}
+
+function copyText(elementId) {
+  const el = document.getElementById(elementId);
+  if (!el) return;
+  const text = el.textContent.trim();
+  navigator.clipboard.writeText(text).then(() => {
+    alert('Copied code: ' + text);
+  }).catch(() => {
+    alert('Code: ' + text);
+  });
+}
 
 <? if (page === 'participant') { ?>
-function loadNames(){
-  const q=document.getElementById('name').value.trim();
-  google.script.run.withSuccessHandler(names=>{
-    document.getElementById('nameList').innerHTML=(names||[]).map(n=>'<option value="'+escapeHtml(n)+'"></option>').join('');
-  }).getParticipantNames(q);
-}
-document.getElementById('name').addEventListener('input',loadNames);
-loadNames();
+// ================= PARTICIPANT INTERACTIVE LOGIC =================
 
-function sendOtp(){
-  clearMsg('loginMsg');
-  const name=document.getElementById('name').value.trim();
-  if(!name){msg('loginMsg','Select your registered name first.');return;}
-  const btn=document.getElementById('sendOtpBtn');
-  btn.disabled=true; btn.textContent='Sending OTP…';
-  google.script.run.withSuccessHandler(res=>{
-    btn.disabled=false; btn.textContent='Send OTP to my email';
-    if(!res.ok){msg('loginMsg',res.message||'Could not send OTP.');return;}
-    document.getElementById('otpBox').classList.remove('hidden');
-    document.getElementById('otpHint').textContent=res.cooldown ? res.message+' It will be sent to '+res.maskedEmail+'.' : 'OTP sent to '+res.maskedEmail+'. It expires in 10 minutes.';
-    msg('loginMsg',res.message||'OTP sent successfully. Check your email.','ok');
-    document.getElementById('otp').focus();
-  }).withFailureHandler(e=>{
-    btn.disabled=false; btn.textContent='Send OTP to my email';
-    msg('loginMsg',e.message||'Could not send OTP.');
-  }).requestOtp(name);
-}
+const nameInput = document.getElementById('nameSearch');
+const dropdown = document.getElementById('autocompleteDropdown');
+const selectedBox = document.getElementById('selectedNameBox');
+const selectedDisplay = document.getElementById('selectedNameDisplay');
+let nameTimer = null;
+let suggestionsList = [];
+let activeSuggestionIdx = -1;
 
-function verifyOtpCode(){
-  clearMsg('loginMsg');
-  const name=document.getElementById('name').value.trim();
-  const otp=document.getElementById('otp').value.trim();
-  if(!name||!/^[0-9]{6}$/.test(otp)){msg('loginMsg','Enter the 6-digit OTP sent to your email.');return;}
-  google.script.run.withSuccessHandler(res=>{
-    if(!res.ok){msg('loginMsg','Verification failed.');return;}
-    sessionId=res.sessionId;
-    document.getElementById('loginView').classList.add('hidden');
-    document.getElementById('participantView').classList.remove('hidden');
-    loadDashboard();
-  }).withFailureHandler(e=>msg('loginMsg',e.message||'OTP verification failed.')).verifyOtp(name,otp);
-}
-function loadDashboard(){
-  google.script.run.withSuccessHandler(renderDashboard).withFailureHandler(e=>{
-    document.getElementById('participantView').innerHTML='<div class="card"><h2>Session expired</h2><p>'+escapeHtml(e.message)+'</p></div>';
-  }).getParticipantDashboard(sessionId);
-}
-function renderDashboard(p){
-  document.getElementById('welcome').textContent='Welcome, '+p.name;
-  document.getElementById('trackInfo').innerHTML=p.track ? '<span class="pill ok">Assigned track: '+escapeHtml(p.track)+'</span>' : '<span class="pill pending">Track will be assigned at check-in</span>';
-  renderQR('qr1',p.checkin.token,p.checkin.redeemed,'checkStatus');
-  renderQR('qr2',p.food.token,p.food.redeemed,'foodStatus');
-  renderQR('qr3',p.goodie.token,p.goodie.redeemed,'goodieStatus');
-}
-function renderQR(id,token,redeemed,statusId){
-  const el=document.getElementById(id); el.innerHTML='';
-  new QRCode(el,{text:token,width:180,height:180,correctLevel:QRCode.CorrectLevel.M});
-  const s=document.getElementById(statusId);
-  s.innerHTML=redeemed ? '<span class="pill ok">REDEEMED</span>' : '<span class="pill pending">NOT REDEEMED</span>';
-}
-function escapeHtml(s){return String(s||'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));}
-<? } else { ?>
+function renderSuggestions(names, query) {
+  suggestionsList = names || [];
+  activeSuggestionIdx = -1;
 
-function checkAdmin(){
-  google.script.run.withSuccessHandler(res=>{
-    if(!res.authorized){msg('adminMsg','Your Google account is not authorized for admin scanning.');return;}
-    adminEmail=res.email;
-    document.getElementById('adminLogin').classList.add('hidden');
-    document.getElementById('adminView').classList.remove('hidden');
-    startScanner();
-  }).withFailureHandler(e=>msg('adminMsg',e.message||'Could not verify admin.')).adminStatus('');
-}
-
-function startScanner(){
-  if(scanner){return;}
-  scanner = new Html5Qrcode("reader");
-  scanner.start(
-    {facingMode:"environment"},
-    {fps:10,qrbox:{width:260,height:260}},
-    token => handleToken(token),
-    () => {}
-  ).catch(e=>msg('scanMsg','Camera could not start. Allow camera permission and use HTTPS.'));
-}
-function stopScanner(){
-  if(scanner){scanner.stop().then(()=>{scanner.clear();scanner=null;}).catch(()=>{scanner=null;});}
-}
-function handleToken(token){
-  token=String(token||'').trim();
-  if(!token || token===lastToken)return;
-  lastToken=token;
-  setTimeout(()=>lastToken='',2500);
-  clearMsg('scanMsg');
-  google.script.run.withSuccessHandler(handleRedeem).withFailureHandler(e=>{
-    msg('scanMsg',e.message||'Redemption failed.');
-  }).redeemQR(token,adminEmail,'');
-}
-function handleRedeem(res){
-  if(res.needsTrack){
-    pendingToken = currentPendingTokenHack();
-    document.getElementById('trackParticipant').textContent=res.participant.name+' · '+res.participant.id;
-    document.getElementById('trackSelect').innerHTML=(res.tracks||[]).map(t=>'<option>'+escapeHtml(t)+'</option>').join('');
-    document.getElementById('trackModal').classList.remove('hidden');
-    window._pendingToken = pendingToken;
+  if (suggestionsList.length === 0) {
+    dropdown.innerHTML = `
+      <div style="padding:12px 14px;color:#64748b;font-size:12px;text-align:center;">
+        No participants matching "<b>${escapeHtml(query)}</b>".
+      </div>`;
+    dropdown.classList.add('open');
     return;
   }
-  document.getElementById('scanResult').innerHTML='<div class="big">'+escapeHtml(res.participantName)+'</div><p>'+escapeHtml(res.message)+'</p><span class="pill ok">'+escapeHtml(res.type)+'</span>';
+
+  dropdown.innerHTML = suggestionsList.map((name, idx) => {
+    const initials = name.split(/\s+/).map(w => w[0]).filter(Boolean).slice(0, 2).join('').toUpperCase();
+    return `
+      <div class="suggestion-item" data-idx="${idx}" onclick="selectParticipantName('${escapeHtml(name).replace(/'/g, "\\'")}')">
+        <div class="suggestion-avatar">${initials}</div>
+        <div class="suggestion-name">${escapeHtml(name)}</div>
+      </div>`;
+  }).join('');
+  dropdown.classList.add('open');
 }
-function currentPendingTokenHack(){
-  return window._lastScannedToken || '';
+
+function loadNameSuggestions() {
+  const val = nameInput.value.trim();
+  if (!val) {
+    dropdown.classList.remove('open');
+    return;
+  }
+  google.script.run
+    .withSuccessHandler(names => renderSuggestions(names, val))
+    .getParticipantNames(val);
 }
-const originalHandleToken=handleToken;
-handleToken=function(token){
-  window._lastScannedToken=String(token||'').trim();
-  originalHandleToken(token);
-};
-function confirmTrack(){
-  const token=window._pendingToken;
-  const track=document.getElementById('trackSelect').value;
-  if(!token||!track)return;
-  google.script.run.withSuccessHandler(res=>{
-    closeTrackModal();
-    document.getElementById('scanResult').innerHTML='<div class="big">'+escapeHtml(res.participantName)+'</div><p>'+escapeHtml(res.message)+'</p><span class="pill ok">'+escapeHtml(res.track)+'</span>';
-  }).withFailureHandler(e=>msg('scanMsg',e.message||'Could not complete check-in.')).redeemQR(token,adminEmail,track);
+
+nameInput.addEventListener('input', () => {
+  clearTimeout(nameTimer);
+  nameTimer = setTimeout(loadNameSuggestions, 180);
+});
+
+nameInput.addEventListener('focus', () => {
+  if (nameInput.value.trim()) loadNameSuggestions();
+});
+
+nameInput.addEventListener('keydown', (e) => {
+  if (!dropdown.classList.contains('open')) return;
+  const items = dropdown.querySelectorAll('.suggestion-item');
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    activeSuggestionIdx = Math.min(activeSuggestionIdx + 1, items.length - 1);
+    updateActiveSuggestion(items);
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    activeSuggestionIdx = Math.max(activeSuggestionIdx - 1, 0);
+    updateActiveSuggestion(items);
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    if (activeSuggestionIdx >= 0 && activeSuggestionIdx < suggestionsList.length) {
+      selectParticipantName(suggestionsList[activeSuggestionIdx]);
+    }
+  } else if (e.key === 'Escape') {
+    dropdown.classList.remove('open');
+  }
+});
+
+function updateActiveSuggestion(items) {
+  items.forEach((it, idx) => {
+    if (idx === activeSuggestionIdx) {
+      it.classList.add('active');
+      it.scrollIntoView({ block: 'nearest' });
+    } else {
+      it.classList.remove('active');
+    }
+  });
 }
-function closeTrackModal(){document.getElementById('trackModal').classList.add('hidden');window._pendingToken='';}
-function escapeHtml(s){return String(s||'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));}
+
+document.addEventListener('click', (e) => {
+  if (!dropdown.contains(e.target) && e.target !== nameInput) {
+    dropdown.classList.remove('open');
+  }
+});
+
+function selectParticipantName(name) {
+  nameInput.value = name;
+  dropdown.classList.remove('open');
+  selectedDisplay.textContent = name;
+  selectedBox.classList.remove('hidden');
+  document.getElementById('credential').focus();
+}
+
+function clearSelectedName() {
+  selectedBox.classList.add('hidden');
+  nameInput.value = '';
+  nameInput.focus();
+}
+
+function submitVerification() {
+  clearAlert('loginAlert');
+  const name = nameInput.value.trim();
+  const credential = document.getElementById('credential').value.trim();
+
+  if (!name) {
+    showAlert('loginAlert', 'Please search and select your registered name.');
+    return;
+  }
+  if (!credential) {
+    showAlert('loginAlert', 'Please enter your registered email address or phone number.');
+    return;
+  }
+
+  const btn = document.getElementById('verifyBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span>Verifying...</span>';
+
+  google.script.run
+    .withSuccessHandler(res => {
+      btn.disabled = false;
+      btn.innerHTML = '<span>Verify &amp; Continue</span><span>→</span>';
+
+      if (!res.ok) {
+        showAlert('loginAlert', res.message || 'Verification failed. Please check your details.');
+        return;
+      }
+
+      currentSessionId = res.sessionId;
+      document.getElementById('loginSection').classList.add('hidden');
+      document.getElementById('dashboardSection').classList.remove('hidden');
+      loadDashboardData();
+    })
+    .withFailureHandler(err => {
+      btn.disabled = false;
+      btn.innerHTML = '<span>Verify &amp; Continue</span><span>→</span>';
+      showAlert('loginAlert', err.message || 'Verification failed. Please check your name and phone/email.');
+    })
+    .verifyParticipant(name, credential);
+}
+
+function loadDashboardData() {
+  google.script.run
+    .withSuccessHandler(renderDashboard)
+    .withFailureHandler(err => {
+      showAlert('dashAlert', 'Session error: ' + (err.message || 'Please log in again.'));
+    })
+    .getParticipantDashboard(currentSessionId);
+}
+
+function renderDashboard(data) {
+  document.getElementById('participantName').textContent = data.name;
+  document.getElementById('participantId').textContent = data.id;
+  if (data.college) {
+    document.getElementById('participantCollege').textContent = '📍 ' + data.college;
+  }
+  if (data.ticketType) {
+    document.getElementById('participantTicketType').textContent = data.ticketType;
+  }
+
+  const trackBadge = document.getElementById('trackBadge');
+  if (data.track) {
+    trackBadge.className = 'pill ok';
+    trackBadge.textContent = '✓ Checked In · ' + data.track;
+  } else {
+    trackBadge.className = 'pill pending';
+    trackBadge.textContent = 'Track Pending Check-in';
+  }
+
+  // Pass Codes Display
+  document.getElementById('checkinCodeText').textContent = data.checkin.token;
+  document.getElementById('foodCodeText').textContent = data.food.token;
+  document.getElementById('goodieCodeText').textContent = data.goodie.token;
+
+  // Render Check-in QR
+  renderQrCard('checkinQr', 'checkinBadge', 'checkinDetail', {
+    token: data.checkin.token,
+    redeemed: data.checkin.redeemed,
+    redeemedAt: data.checkin.redeemedAt,
+    activeText: '✓ Checked In',
+    pendingText: 'Ready for Check-in',
+    redeemedDesc: 'Checked in on ' + (data.checkin.redeemedAt || 'earlier') + (data.track ? ' · Track: ' + data.track : ''),
+    pendingDesc: 'Show this QR or quote code ' + data.checkin.token + ' at the entrance desk.'
+  });
+
+  // Render Food QR
+  renderQrCard('foodQr', 'foodBadge', 'foodDetail', {
+    token: data.food.token,
+    redeemed: data.food.redeemed,
+    redeemedAt: data.food.redeemedAt,
+    activeText: '✓ Food Redeemed',
+    pendingText: 'Available for Lunch',
+    redeemedDesc: 'Meal redeemed on ' + (data.food.redeemedAt || 'earlier'),
+    pendingDesc: 'Show this QR or quote code ' + data.food.token + ' at the catering counter.'
+  });
+
+  // Render Goodie Kit QR
+  renderQrCard('goodieQr', 'goodieBadge', 'goodieDetail', {
+    token: data.goodie.token,
+    redeemed: data.goodie.redeemed,
+    redeemedAt: data.goodie.redeemedAt,
+    activeText: '✓ Kit Collected',
+    pendingText: 'Available to Collect',
+    redeemedDesc: 'Kit collected on ' + (data.goodie.redeemedAt || 'earlier'),
+    pendingDesc: 'Show this QR or quote code ' + data.goodie.token + ' at the kit distribution desk.'
+  });
+}
+
+function renderQrCard(containerId, badgeId, descId, config) {
+  const container = document.getElementById(containerId);
+  const badge = document.getElementById(badgeId);
+  const desc = document.getElementById(descId);
+
+  container.innerHTML = '';
+  new QRCode(container, {
+    text: config.token,
+    width: 170,
+    height: 170,
+    colorDark: '#090d16',
+    colorLight: '#ffffff',
+    correctLevel: QRCode.CorrectLevel.L
+  });
+
+  if (config.redeemed) {
+    badge.className = 'pill ok';
+    badge.textContent = config.activeText;
+    desc.textContent = config.redeemedDesc;
+  } else {
+    badge.className = 'pill pending';
+    badge.textContent = config.pendingText;
+    desc.textContent = config.pendingDesc;
+  }
+}
+
+function saveQrImage(containerId, filename) {
+  const container = document.getElementById(containerId);
+  const img = container.querySelector('img');
+  const canvas = container.querySelector('canvas');
+  const dataUrl = img ? img.src : (canvas ? canvas.toDataURL('image/png') : null);
+
+  if (!dataUrl) {
+    alert('QR code image could not be captured.');
+    return;
+  }
+
+  const link = document.createElement('a');
+  link.download = (filename || 'event-pass') + '.png';
+  link.href = dataUrl;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
+
+function logOutParticipant() {
+  currentSessionId = null;
+  nameInput.value = '';
+  document.getElementById('credential').value = '';
+  selectedBox.classList.add('hidden');
+  clearAlert('loginAlert');
+  document.getElementById('dashboardSection').classList.add('hidden');
+  document.getElementById('loginSection').classList.remove('hidden');
+}
+
+<? } else { ?>
+// ================= ADMIN SCANNER & POPUP LOGIC =================
+
+function loginAdmin() {
+  clearAlert('adminAuthAlert');
+  const email = document.getElementById('adminEmailInput').value.trim();
+
+  google.script.run
+    .withSuccessHandler(res => {
+      if (!res.authorized) {
+        showAlert('adminAuthAlert', 'Access denied. The email is not listed or not active in the Admins sheet.');
+        return;
+      }
+      currentAdminEmail = res.email || email;
+      document.getElementById('activeAdminDisplay').textContent = currentAdminEmail;
+      document.getElementById('adminAuthSection').classList.add('hidden');
+      document.getElementById('adminScannerSection').classList.remove('hidden');
+      document.getElementById('trackMgmtPanel').classList.remove('hidden');
+      loadTrackStats();
+      startScanner();
+    })
+    .withFailureHandler(err => {
+      showAlert('adminAuthAlert', err.message || 'Admin verification failed.');
+    })
+    .adminStatus(email);
+}
+
+function startScanner() {
+  if (videoStream) return;
+  clearAlert('scanStatusAlert');
+
+  const video = document.getElementById('scannerVideo');
+  const container = document.getElementById('scannerContainer');
+
+  const constraints = {
+    video: {
+      facingMode: { ideal: currentFacingMode },
+      width: { ideal: 1280 },
+      height: { ideal: 720 }
+    },
+    audio: false
+  };
+
+  navigator.mediaDevices.getUserMedia(constraints)
+    .then(stream => {
+      videoStream = stream;
+      video.srcObject = stream;
+      video.setAttribute('playsinline', true);
+      video.onloadedmetadata = () => {
+        video.play();
+        container.classList.remove('hidden');
+        document.getElementById('startCamBtn').classList.add('hidden');
+        document.getElementById('stopCamBtn').classList.remove('hidden');
+        document.getElementById('switchCamBtn').classList.remove('hidden');
+        requestAnimationFrame(tickScan);
+      };
+    })
+    .catch(err => {
+      console.warn('Initial camera constraint failed, retrying generic video...', err);
+      navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+        .then(stream => {
+          videoStream = stream;
+          video.srcObject = stream;
+          video.setAttribute('playsinline', true);
+          video.onloadedmetadata = () => {
+            video.play();
+            container.classList.remove('hidden');
+            document.getElementById('startCamBtn').classList.add('hidden');
+            document.getElementById('stopCamBtn').classList.remove('hidden');
+            document.getElementById('switchCamBtn').classList.remove('hidden');
+            requestAnimationFrame(tickScan);
+          };
+        })
+        .catch(e => {
+          showAlert('scanStatusAlert', 'Camera access could not be started: ' + (e.message || 'Permission denied') + '. You can click "Scan from Photo" or paste the code below.');
+        });
+    });
+}
+
+function tickScan() {
+  if (!videoStream) return;
+  const video = document.getElementById('scannerVideo');
+  const canvas = document.getElementById('scannerCanvas');
+  if (!video || !canvas) return;
+
+  // Don't scan if a popup is already active
+  const modal = document.getElementById('scanPopupModal');
+  if (modal && !modal.classList.contains('hidden')) {
+    scanAnimationId = requestAnimationFrame(tickScan);
+    return;
+  }
+
+  if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && video.videoWidth > 0 && video.videoHeight > 0) {
+    if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+    }
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    if (typeof jsQR !== 'undefined') {
+      let code = jsQR(imageData.data, canvas.width, canvas.height, {
+        inversionAttempts: 'dontInvert'
+      });
+      if (!code) {
+        code = jsQR(imageData.data, canvas.width, canvas.height, {
+          inversionAttempts: 'attemptBoth'
+        });
+      }
+
+      if (code && code.data) {
+        handleScannedToken(code.data);
+      }
+    }
+  }
+
+  scanAnimationId = requestAnimationFrame(tickScan);
+}
+
+function stopScanner() {
+  if (videoStream) {
+    videoStream.getTracks().forEach(track => track.stop());
+    videoStream = null;
+  }
+  if (scanAnimationId) {
+    cancelAnimationFrame(scanAnimationId);
+    scanAnimationId = null;
+  }
+  document.getElementById('scannerContainer').classList.add('hidden');
+  document.getElementById('startCamBtn').classList.remove('hidden');
+  document.getElementById('stopCamBtn').classList.add('hidden');
+  document.getElementById('switchCamBtn').classList.add('hidden');
+}
+
+function toggleCamera() {
+  currentFacingMode = currentFacingMode === 'environment' ? 'user' : 'environment';
+  stopScanner();
+  startScanner();
+}
+
+function scanQrFromFile(input) {
+  if (!input.files || input.files.length === 0) return;
+  const file = input.files[0];
+  clearAlert('scanStatusAlert');
+
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    const img = new Image();
+    img.onload = function() {
+      const tempCanvas = document.createElement('canvas');
+      const tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true });
+      
+      let width = img.width;
+      let height = img.height;
+      const maxDimension = 1200;
+      if (width > maxDimension || height > maxDimension) {
+        if (width > height) {
+          height = Math.round((height * maxDimension) / width);
+          width = maxDimension;
+        } else {
+          width = Math.round((width * maxDimension) / height);
+          height = maxDimension;
+        }
+      }
+
+      tempCanvas.width = width;
+      tempCanvas.height = height;
+      tempCtx.drawImage(img, 0, 0, width, height);
+
+      const imageData = tempCtx.getImageData(0, 0, width, height);
+      if (typeof jsQR === 'undefined') {
+        showAlert('scanStatusAlert', 'QR Decoder library is still loading. Please try again.');
+        input.value = '';
+        return;
+      }
+
+      let code = jsQR(imageData.data, width, height, { inversionAttempts: 'dontInvert' });
+      if (!code) {
+        code = jsQR(imageData.data, width, height, { inversionAttempts: 'attemptBoth' });
+      }
+
+      if (code && code.data) {
+        handleScannedToken(code.data);
+      } else {
+        showAlert('scanStatusAlert', 'Could not detect a QR code in the uploaded image. Please ensure the QR is clear, or paste the pass code directly.');
+      }
+      input.value = '';
+    };
+    img.onerror = function() {
+      showAlert('scanStatusAlert', 'Failed to read image file.');
+      input.value = '';
+    };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+function submitManualToken() {
+  const token = document.getElementById('manualTokenInput').value.trim();
+  if (!token) {
+    showAlert('scanStatusAlert', 'Please enter a pass code or registration ID.');
+    return;
+  }
+  handleScannedToken(token);
+}
+
+function cleanScannedData(raw) {
+  let s = String(raw || '').trim();
+  if (s.includes('token=')) {
+    try {
+      const u = new URL(s);
+      s = u.searchParams.get('token') || s;
+    } catch(e) {}
+  }
+  return s;
+}
+
+function handleScannedToken(token) {
+  const cleanToken = cleanScannedData(token);
+  if (!cleanToken || cleanToken === lastScannedToken) return;
+
+  lastScannedToken = cleanToken;
+  setTimeout(() => { lastScannedToken = ''; }, 3000);
+  clearAlert('scanStatusAlert');
+
+  google.script.run
+    .withSuccessHandler(res => {
+      openRedemptionPopup(res, cleanToken);
+    })
+    .withFailureHandler(err => {
+      showAlert('scanStatusAlert', err.message || 'Pass Code lookup failed.');
+    })
+    .redeemQR(cleanToken, currentAdminEmail, '', false);
+}
+
+function openRedemptionPopup(res, token) {
+  currentPopupData = { res, token };
+  const modal = document.getElementById('scanPopupModal');
+  const p = res.participant || {};
+
+  document.getElementById('popupPassType').textContent = res.type || 'Event Voucher';
+  document.getElementById('popupParticipantName').textContent = p.name || res.participantName || 'Participant';
+  document.getElementById('popupParticipantId').textContent = p.id || res.participantId || '';
+  document.getElementById('popupCollege').textContent = p.college ? '🏛️ ' + p.college : '';
+  document.getElementById('popupTicketType').textContent = p.ticketType || 'Standard Attendee';
+  document.getElementById('popupRegType').textContent = p.registrationType || 'Individual';
+  
+  if (p.email || p.phone) {
+    document.getElementById('popupContactInfo').textContent = `✉️ ${p.email || ''} · 📱 ${p.phone || ''}`;
+  } else {
+    document.getElementById('popupContactInfo').textContent = '';
+  }
+
+  const trackSection = document.getElementById('popupTrackSection');
+  const confirmBtn = document.getElementById('popupConfirmBtn');
+  const statusBadge = document.getElementById('popupStatusBadge');
+  const msgEl = document.getElementById('popupMessage');
+
+  // Case 1: Already Redeemed
+  if (res.alreadyRedeemed) {
+    statusBadge.className = 'pill pending';
+    statusBadge.textContent = '⚠️ Already Redeemed';
+    trackSection.classList.add('hidden');
+    msgEl.innerHTML = `<span style="color:#f87171;font-weight:700;">${escapeHtml(res.message)}</span>`;
+    confirmBtn.textContent = 'Close';
+    confirmBtn.onclick = closePopupModal;
+    modal.classList.remove('hidden');
+    return;
+  }
+
+// ── Track Capacity Management ──────────────────────────────────────────────────
+
+let cachedTrackStats = [];
+
+function loadTrackStats() {
+  google.script.run
+    .withSuccessHandler(stats => {
+      cachedTrackStats = stats || [];
+      renderTrackStats(cachedTrackStats);
+    })
+    .withFailureHandler(err => {
+      document.getElementById('trackStatsGrid').innerHTML =
+        `<div style="color:#f87171;font-size:12px;padding:10px;">Failed to load track data: ${escapeHtml(err.message)}</div>`;
+    })
+    .getTrackStats();
+}
+
+function renderTrackStats(stats) {
+  const grid = document.getElementById('trackStatsGrid');
+  if (!stats || stats.length === 0) {
+    grid.innerHTML = '<div style="color:#64748b;font-size:13px;text-align:center;padding:14px;">No track data available.</div>';
+    return;
+  }
+  grid.innerHTML = stats.map(s => {
+    const hasLimit = s.limit > 0;
+    const pct = hasLimit ? Math.min(100, Math.round((s.enrolled / s.limit) * 100)) : 0;
+    const fillClass = pct >= 100 ? 'danger' : pct >= 80 ? 'warn' : '';
+    const chipClass = s.full ? 'full' : '';
+    const countLabel = hasLimit
+      ? `${s.enrolled} / ${s.limit} seats`
+      : `${s.enrolled} enrolled · Unlimited`;
+    const availLabel = s.full
+      ? `<span style="color:#f87171;font-weight:700;">● FULL</span>`
+      : hasLimit
+        ? `<span style="color:#34d399;">● ${s.available} seat${s.available !== 1 ? 's' : ''} available</span>`
+        : `<span style="color:#64748b;">No limit set</span>`;
+    const rowClass = s.full ? ' track-full' : '';
+    return `
+      <div class="track-stat-row${rowClass}">
+        <div class="track-stat-top">
+          <span class="track-stat-name">🎯 ${escapeHtml(s.track)}</span>
+          <span class="track-count-chip ${chipClass}">${countLabel}</span>
+        </div>
+        ${hasLimit ? `
+        <div class="track-progress-bar">
+          <div class="track-progress-fill ${fillClass}" style="width:${pct}%"></div>
+        </div>` : '<div style="height:6px;"></div>'}
+        <div class="track-limit-row">
+          <span>${availLabel}</span>
+          <span style="flex:1"></span>
+          <label for="trackLimit_${escapeHtml(s.track)}">Limit:</label>
+          <input
+            id="trackLimit_${escapeHtml(s.track)}"
+            class="track-limit-input"
+            type="number" min="0" step="1"
+            value="${s.limit}"
+            placeholder="0"
+            title="0 = unlimited"
+          >
+          <button class="track-save-btn" onclick="saveTrackLimit('${escapeHtml(s.track)}')">Save</button>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+function saveTrackLimit(track) {
+  const input = document.getElementById('trackLimit_' + track);
+  if (!input) return;
+  const newLimit = parseInt(input.value, 10);
+  if (isNaN(newLimit) || newLimit < 0) {
+    input.style.borderColor = '#ef4444';
+    setTimeout(() => input.style.borderColor = '', 1200);
+    return;
+  }
+  input.disabled = true;
+  google.script.run
+    .withSuccessHandler(result => {
+      input.disabled = false;
+      cachedTrackStats = result.stats || cachedTrackStats;
+      renderTrackStats(cachedTrackStats);
+    })
+    .withFailureHandler(err => {
+      input.disabled = false;
+      alert('Failed to save limit: ' + (err.message || 'Unknown error'));
+    })
+    .setTrackLimit(track, newLimit);
+}
+
+function buildTrackSelectOptions(trackStats) {
+  // Build <option> elements with live capacity data
+  return (trackStats || []).map(s => {
+    const hasLimit = s.limit > 0;
+    const label = hasLimit
+      ? `${s.track}  (${s.enrolled}/${s.limit}${s.full ? ' · FULL' : ''})`
+      : `${s.track}  (${s.enrolled} enrolled)`;
+    return `<option value="${escapeHtml(s.track)}"${s.full ? ' disabled' : ''}>${escapeHtml(label)}</option>`;
+  }).join('');
+}
+
+// ── Popup Case 2: Check-in with Track Selection ────────────────────────────────
+
+  // Case 2: Check-in (Requires Track Selection)
+  if (res.needsTrack) {
+    statusBadge.className = 'pill ok';
+    statusBadge.textContent = 'Ready for Check-in';
+    trackSection.classList.remove('hidden');
+
+    // Populate track selector with live capacity from server response
+    const trackStats = res.trackStats || cachedTrackStats;
+    const selectEl = document.getElementById('popupTrackSelect');
+    selectEl.innerHTML = buildTrackSelectOptions(trackStats);
+
+    // Auto-pick first available (non-full) track
+    const firstAvailable = (trackStats || []).find(s => !s.full);
+    if (firstAvailable) selectEl.value = firstAvailable.track;
+
+    // Show capacity hint
+    const hintEl = document.getElementById('popupTrackCapacityHint');
+    const allFull = trackStats.length > 0 && trackStats.every(s => s.full);
+    if (allFull) {
+      hintEl.innerHTML = '<span style="color:#f87171;font-weight:700;">⚠️ All tracks are at capacity!</span>';
+    } else {
+      const available = trackStats.filter(s => !s.full);
+      hintEl.textContent = `${available.length} track${available.length !== 1 ? 's' : ''} with available seats.`;
+    }
+
+    msgEl.textContent = 'Select track to assign and complete check-in.';
+    confirmBtn.textContent = '✓ Confirm Check-in & Assign Track';
+    confirmBtn.onclick = executePopupAction;
+    modal.classList.remove('hidden');
+    return;
+  }
+
+  // Case 1.5: Track is Full
+  if (res.trackFull) {
+    statusBadge.className = 'pill pending';
+    statusBadge.textContent = '⛔ Track Full';
+    trackSection.classList.add('hidden');
+    msgEl.innerHTML = `<span style="color:#f87171;font-weight:700;">${escapeHtml(res.message)}</span>`;
+    confirmBtn.textContent = 'Close & Choose Another';
+    confirmBtn.onclick = closePopupModal;
+    modal.classList.remove('hidden');
+    return;
+  }
+
+  // Case 3: Food / Goodie Confirmation
+  if (res.needsConfirmation) {
+    statusBadge.className = 'pill ok';
+    statusBadge.textContent = 'Available to Redeem';
+    trackSection.classList.add('hidden');
+    msgEl.textContent = `Click below to confirm handover of ${res.type}.`;
+    confirmBtn.textContent = `✓ Confirm ${res.type} Redemption`;
+    confirmBtn.onclick = executePopupAction;
+    modal.classList.remove('hidden');
+    return;
+  }
+
+  // Case 4: Instant Success
+  statusBadge.className = 'pill ok';
+  statusBadge.textContent = '✓ Redeemed Successfully';
+  trackSection.classList.add('hidden');
+  msgEl.innerHTML = `<span style="color:#34d399;font-weight:700;">${escapeHtml(res.message)}</span>`;
+  confirmBtn.textContent = 'Done';
+  confirmBtn.onclick = closePopupModal;
+  modal.classList.remove('hidden');
+}
+
+function executePopupAction() {
+  if (!currentPopupData) return;
+  const { res, token } = currentPopupData;
+  const track = document.getElementById('popupTrackSelect').value;
+
+  const btn = document.getElementById('popupConfirmBtn');
+  btn.disabled = true;
+  btn.textContent = 'Processing...';
+
+  google.script.run
+    .withSuccessHandler(finalRes => {
+      btn.disabled = false;
+      closePopupModal();
+
+      // Refresh track panel after successful check-in
+      if (finalRes.type === 'Event Check-in') {
+        loadTrackStats();
+      }
+
+      document.getElementById('scanResultBox').innerHTML = `
+        <div style="background:var(--ok-bg);border:1px solid var(--ok-border);padding:14px;border-radius:12px;margin-top:12px;color:#6ee7b7;">
+          <div style="font-weight:800;font-size:16px;color:#10b981;">✓ ${escapeHtml(finalRes.type || 'Voucher')} Completed</div>
+          <div style="font-size:14px;margin:4px 0;color:#fff;">Participant: <b>${escapeHtml(finalRes.participantName || '')}</b></div>
+          <div style="font-size:12px;">${escapeHtml(finalRes.message || '')}</div>
+        </div>
+      `;
+    })
+    .withFailureHandler(err => {
+      btn.disabled = false;
+      showAlert('scanStatusAlert', err.message || 'Redemption execution failed.');
+      closePopupModal();
+    })
+    .redeemQR(token, currentAdminEmail, track, true);
+}
+
+function closePopupModal() {
+  document.getElementById('scanPopupModal').classList.add('hidden');
+  currentPopupData = null;
+}
+
+function logOutAdmin() {
+  stopScanner();
+  currentAdminEmail = '';
+  cachedTrackStats = [];
+  document.getElementById('adminScannerSection').classList.add('hidden');
+  document.getElementById('trackMgmtPanel').classList.add('hidden');
+  document.getElementById('adminAuthSection').classList.remove('hidden');
+  clearAlert('adminAuthAlert');
+}
+
 <? } ?>
 </script>
 </body>
