@@ -103,6 +103,28 @@
       text-transform: uppercase;
       letter-spacing: 0.05em;
     }
+    .corner-link {
+      font-size: 11px;
+      font-weight: 600;
+      color: #64748b;
+      text-decoration: none;
+      padding: 4px 9px;
+      border-radius: 7px;
+      border: 1px solid transparent;
+      letter-spacing: 0.03em;
+      white-space: nowrap;
+      transition: all 0.15s ease;
+    }
+    .corner-link:hover {
+      color: #cbd5e1;
+      background: rgba(255, 255, 255, 0.06);
+      border-color: rgba(255, 255, 255, 0.1);
+    }
+    .corner-link.active {
+      color: #a5b4fc;
+      background: rgba(99, 102, 241, 0.12);
+      border-color: rgba(99, 102, 241, 0.25);
+    }
 
     /* Cards */
     .card {
@@ -755,7 +777,7 @@
       <span>AWS COMMUNITY DAY</span>
       <span class="brand-badge"><?= page === 'admin' ? 'Admin Scanner' : 'Participant' ?></span>
     </div>
-    <div id="topRight"></div>
+    <div id="topRight"><a class="corner-link" href="?page=admin" title="Admin scanner">Admin</a></div>
   </header>
 
   <? if (page === 'participant') { ?>

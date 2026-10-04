@@ -589,12 +589,10 @@ function renderHtml(templateHtml, page) {
     isParticipant ? 'Participant' : 'Admin Scanner'
   );
 
-  // Navigation bar
-  const navHtml = `
-    <div style="display:flex;align-items:center;gap:8px;font-size:13px;">
-      <a href="/" style="text-decoration:none;font-weight:700;padding:6px 12px;border-radius:8px;background:${isParticipant ? '#2563eb' : 'rgba(255,255,255,0.08)'};color:${isParticipant ? '#ffffff' : '#94a3b8'};border:1px solid ${isParticipant ? '#2563eb' : 'rgba(255,255,255,0.1)'};transition:all 0.2s;">Participant Portal</a>
-      <a href="/?page=admin" style="text-decoration:none;font-weight:700;padding:6px 12px;border-radius:8px;background:${!isParticipant ? '#2563eb' : 'rgba(255,255,255,0.08)'};color:${!isParticipant ? '#ffffff' : '#94a3b8'};border:1px solid ${!isParticipant ? '#2563eb' : 'rgba(255,255,255,0.1)'};transition:all 0.2s;">Admin Scanner</a>
-    </div>`;
+  // Small top-right corner link (admin de-emphasized, participant portal centric)
+  const navHtml = isParticipant
+    ? `<a href="/?page=admin" class="corner-link" title="Admin scanner">Admin</a>`
+    : `<a href="/" class="corner-link" title="Back to participant portal">&larr; Participant Portal</a>`;
 
   // google.script.run polyfill
   const polyfillScript = `
@@ -629,7 +627,7 @@ function renderHtml(templateHtml, page) {
   </script>`;
 
   rendered = rendered.replace('</head>', polyfillScript + '\n</head>');
-  rendered = rendered.replace('<div id="topRight"></div>', `<div id="topRight">${navHtml}</div>`);
+  rendered = rendered.replace(/<div id="topRight">[\s\S]*?<\/div>/, `<div id="topRight">${navHtml}</div>`);
   return rendered;
 }
 
