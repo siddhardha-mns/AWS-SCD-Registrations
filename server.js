@@ -261,6 +261,18 @@ function namesAreSimilar(inputName, registeredName) {
   return false;
 }
 
+function namesMatchForLogin(inputName, registeredName) {
+  const n1 = normalizeName(inputName);
+  const n2 = normalizeName(registeredName);
+  if (!n1 || !n2) return false;
+  if (n1 === n2) return true;
+  const t1 = n1.split(/\s+/).filter(Boolean);
+  const t2 = n2.split(/\s+/).filter(Boolean);
+  const forward = t1.every(w1 => t2.some(w2 => wordsMatchOrSimilar(w1, w2)));
+  const backward = t2.every(w2 => t1.some(w1 => wordsMatchOrSimilar(w1, w2)));
+  return forward && backward;
+}
+
 // ─── Track Stats Helper ──────────────────────────────────────────────────────
 
 function computeTrackStats() {
@@ -306,45 +318,20 @@ const rpcHandlers = {
     const isEmailInput = cred.includes('@');
     const normalizedInputEmail = normalizeEmail(cred);
 
-    // 1. Search for matching credential in dataset
-    const credMatches = participants.filter(p => {
+    const credentialMatches = p => {
       const emailMatches = isEmailInput && normalizeEmail(p.email) === normalizedInputEmail;
       const phoneMatches = phonesMatch(cred, p.phone);
       return emailMatches || phoneMatches;
-    });
+    };
 
-    let matched = null;
-
-    if (credMatches.length > 0) {
-      matched = credMatches.find(p => namesAreSimilar(inputName, p.name));
-      if (!matched && credMatches.length === 1) {
-        const t1 = normalizeName(inputName).split(/\s+/).filter(Boolean);
-        const t2 = normalizeName(credMatches[0].name).split(/\s+/).filter(Boolean);
-        const hasCommonWord = t1.some(w1 => t2.some(w2 => wordsMatchOrSimilar(w1, w2)));
-        if (hasCommonWord || namesAreSimilar(inputName, credMatches[0].name)) {
-          matched = credMatches[0];
-        }
-      }
-    }
-
-    if (!matched) {
-      const nameCandidates = participants.filter(p => namesAreSimilar(inputName, p.name));
-      if (nameCandidates.length > 0) {
-        matched = nameCandidates.find(p => {
-          const emailMatches = isEmailInput && normalizeEmail(p.email) === normalizedInputEmail;
-          const phoneMatches = phonesMatch(cred, p.phone);
-          return emailMatches || phoneMatches;
-        });
-      }
-    }
+    const matched = participants.find(p => credentialMatches(p) && namesMatchForLogin(inputName, p.name));
 
     if (!matched) {
       const nameExists = participants.some(p => namesAreSimilar(inputName, p.name));
       if (!nameExists) {
         throw new Error('Name not found in the registration list. Please check the spelling and try again.');
-      } else {
-        throw new Error('Verification failed. The entered email or phone number does not match the registration record for this participant.');
       }
+      throw new Error('Verification failed. Please check that the selected name matches the entered email or phone number.');
     }
 
     const sessionId = crypto.randomUUID();

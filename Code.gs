@@ -174,6 +174,18 @@ function namesAreSimilar_(inputName, registeredName) {
   return false;
 }
 
+function namesMatchForLogin_(inputName, registeredName) {
+  const n1 = normalizeName_(inputName);
+  const n2 = normalizeName_(registeredName);
+  if (!n1 || !n2) return false;
+  if (n1 === n2) return true;
+  const t1 = n1.split(/\s+/).filter(Boolean);
+  const t2 = n2.split(/\s+/).filter(Boolean);
+  const forward = t1.every(w1 => t2.some(w2 => wordsMatchOrSimilar_(w1, w2)));
+  const backward = t2.every(w2 => t1.some(w1 => wordsMatchOrSimilar_(w1, w2)));
+  return forward && backward;
+}
+
 /**
  * Returns list of participant names matching query.
  * Only returns names — zero sensitive information (emails, phones, tokens) is exposed.
@@ -226,50 +238,22 @@ function verifyParticipant(name, emailOrPhone) {
   const isEmailInput = credential.indexOf('@') !== -1;
   const normalizedInputEmail = normalizeEmail_(credential);
 
-  // 1. Search for matching credential in dataset
-  const credMatches = rows.filter(r => {
+  const credentialMatches = r => {
     const rowPhone = r[2];
     const rowEmail = normalizeEmail_(r[3]);
     const emailMatches = isEmailInput && rowEmail && (rowEmail === normalizedInputEmail);
     const phoneMatches = rowPhone && phonesMatch_(credential, rowPhone);
     return emailMatches || phoneMatches;
-  });
+  };
 
-  let verifiedRow = null;
-
-  if (credMatches.length > 0) {
-    verifiedRow = credMatches.find(r => namesAreSimilar_(inputName, r[1]));
-    if (!verifiedRow && credMatches.length === 1) {
-      const t1 = normalizeName_(inputName).split(/\s+/).filter(Boolean);
-      const t2 = normalizeName_(credMatches[0][1]).split(/\s+/).filter(Boolean);
-      const hasCommonWord = t1.some(w1 => t2.some(w2 => wordsMatchOrSimilar_(w1, w2)));
-      if (hasCommonWord || namesAreSimilar_(inputName, credMatches[0][1])) {
-        verifiedRow = credMatches[0];
-      }
-    }
-  }
-
-  // 2. If not found by credential, search by name candidates
-  if (!verifiedRow) {
-    const nameCandidates = rows.filter(r => namesAreSimilar_(inputName, r[1]));
-    if (nameCandidates.length > 0) {
-      verifiedRow = nameCandidates.find(r => {
-        const rowPhone = r[2];
-        const rowEmail = normalizeEmail_(r[3]);
-        const emailMatches = isEmailInput && rowEmail && (rowEmail === normalizedInputEmail);
-        const phoneMatches = rowPhone && phonesMatch_(credential, rowPhone);
-        return emailMatches || phoneMatches;
-      });
-    }
-  }
+  const verifiedRow = rows.find(r => credentialMatches(r) && namesMatchForLogin_(inputName, r[1]));
 
   if (!verifiedRow) {
     const nameExists = rows.some(r => namesAreSimilar_(inputName, r[1]));
     if (!nameExists) {
       throw new Error('Name not found in the registration list. Please check the spelling and try again.');
-    } else {
-      throw new Error('Verification failed. The entered email or phone number does not match the registration record for this participant.');
     }
+    throw new Error('Verification failed. Please check that the selected name matches the entered email or phone number.');
   }
 
   // Ensure tokens are present
