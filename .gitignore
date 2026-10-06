@@ -2,5 +2,12 @@
 participant_tokens.json
 track_limits.json
 
+# Local endpoint config (contains the Apps Script deployment URL)
+config.json
+
+# Participant data exports — never commit real registrations
+*.csv
+participants.json
+
 # Dependencies
 node_modules/

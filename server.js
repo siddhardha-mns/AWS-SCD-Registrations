@@ -1,16 +1,38 @@
 const http = require('http');
+const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const tls = require('tls');
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const TRACKS = ['Track A', 'Track B', 'Track C', 'Track D'];
 
-const CSV_FILE = path.join(__dirname, 'Untitled spreadsheet - All Participants.csv');
+// ─── Participant Data Source (no registration data is checked into the repo) ──
+// Priority:
+//   1. PARTICIPANTS_URL  — Apps Script / Sheets web app endpoint returning JSON
+//   2. PARTICIPANTS_FILE — local CSV or JSON export (default: ./participants.csv)
+// Environment variables win over the local (gitignored) config.json.
+const LOCAL_CONFIG = loadLocalConfig();
+const PARTICIPANTS_URL = (process.env.PARTICIPANTS_URL || LOCAL_CONFIG.PARTICIPANTS_URL || '').trim();
+const PARTICIPANTS_FILE = path.resolve(
+  process.env.PARTICIPANTS_FILE || LOCAL_CONFIG.PARTICIPANTS_FILE || path.join(__dirname, 'participants.csv')
+);
 // Persist generated QR tokens across restarts
 const TOKEN_STORE_FILE = path.join(__dirname, 'participant_tokens.json');
 // Persist track capacity limits (admin-configurable)
 const TRACK_LIMITS_FILE = path.join(__dirname, 'track_limits.json');
+
+// Local, gitignored overrides so `npm start` works without env vars
+function loadLocalConfig() {
+  const file = path.join(__dirname, 'config.json');
+  try {
+    if (fs.existsSync(file)) return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (e) {
+    console.warn(`⚠️  Ignoring unreadable ${path.basename(file)}: ${e.message}`);
+  }
+  return {};
+}
 
 // ─── Track Limits Store ───────────────────────────────────────────────────────
 
@@ -70,6 +92,119 @@ function parseCsv(content) {
   });
 }
 
+// Accepts an array, or an object wrapping the array (participants/rows/data/values)
+// or Google Sheets `values` output. Returns plain row objects.
+function extractRows(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (payload && typeof payload === 'object') {
+    for (const key of ['participants', 'rows', 'data', 'values']) {
+      if (Array.isArray(payload[key])) return payload[key];
+    }
+  }
+  throw new Error('Unexpected participants payload: expected an array of rows.');
+}
+
+function rowsToObjects(rows) {
+  if (!rows.length) return [];
+  if (Array.isArray(rows[0])) {
+    const headers = rows[0].map(h => String(h == null ? '' : h).trim());
+    return rows.slice(1).map(r => {
+      const obj = {};
+      headers.forEach((h, i) => { obj[h] = r[i] == null ? '' : r[i]; });
+      return obj;
+    });
+  }
+  return rows.filter(r => r && typeof r === 'object');
+}
+
+// Looks up a field by any of the accepted header spellings (case/space insensitive)
+function field(row, ...names) {
+  const keys = Object.keys(row);
+  for (const name of names) {
+    const target = name.trim().toLowerCase();
+    const hit = keys.find(k => k.trim().toLowerCase() === target);
+    if (hit !== undefined) {
+      const value = row[hit];
+      if (value !== undefined && value !== null && String(value).trim() !== '') {
+        return String(value).trim();
+      }
+    }
+  }
+  return '';
+}
+
+// System trust bundles. Google serves a cross-signed chain that Node's built-in
+// roots alone can't verify on some machines, so the system bundle is merged in.
+function trustedCa() {
+  const ca = [...tls.rootCertificates];
+  const candidates = [
+    process.env.NODE_EXTRA_CA_CERTS,
+    '/etc/ssl/cert.pem',
+    '/etc/ssl/certs/ca-certificates.crt',
+    '/etc/pki/tls/certs/ca-bundle.crt'
+  ].filter(Boolean);
+  for (const file of candidates) {
+    try {
+      if (fs.existsSync(file) && fs.statSync(file).size > 0) ca.push(fs.readFileSync(file));
+    } catch (e) { /* ignore */ }
+  }
+  return ca;
+}
+
+function httpsGetJson(url, redirectsLeft = 5) {
+  return new Promise((resolve, reject) => {
+    if (redirectsLeft < 0) return reject(new Error('Too many redirects fetching participant source.'));
+    const req = https.get(
+      url,
+      { headers: { Accept: 'application/json' }, ca: trustedCa(), timeout: 20000 },
+      res => {
+        const location = res.headers.location;
+        if (res.statusCode >= 300 && res.statusCode < 400 && location) {
+          res.resume();
+          return resolve(httpsGetJson(new URL(location, url).toString(), redirectsLeft - 1));
+        }
+        if (res.statusCode !== 200) {
+          res.resume();
+          return reject(new Error(`Participant source responded ${res.statusCode} (${url})`));
+        }
+        let body = '';
+        res.setEncoding('utf8');
+        res.on('data', chunk => { body += chunk; });
+        res.on('end', () => {
+          try { resolve(JSON.parse(body)); }
+          catch (e) { reject(new Error('Participant source did not return valid JSON.')); }
+        });
+      }
+    );
+    req.on('timeout', () => req.destroy(new Error(`Participant source timed out (${url})`)));
+    req.on('error', reject);
+  });
+}
+
+async function fetchRemoteRows() {
+  const payload = await httpsGetJson(PARTICIPANTS_URL);
+  if (payload && payload.ok === false) {
+    throw new Error(payload.error || 'Participant source returned an error.');
+  }
+  return extractRows(payload);
+}
+
+// Stable ID for sheets that have no ID column (derived from email, else name)
+function derivedId(email, name) {
+  const basis = String(email || name || '').trim().toLowerCase();
+  if (!basis) return '';
+  return 'P-' + crypto.createHash('sha1').update(basis).digest('hex').slice(0, 8).toUpperCase();
+}
+
+function readLocalRows() {
+  if (!fs.existsSync(PARTICIPANTS_FILE)) return null;
+  const content = fs.readFileSync(PARTICIPANTS_FILE, 'utf8');
+  if (PARTICIPANTS_FILE.toLowerCase().endsWith('.json')) {
+    return extractRows(JSON.parse(content));
+  }
+  return parseCsv(content);
+}
+
 // ─── Token Store (persisted to disk) ─────────────────────────────────────────
 
 function loadTokenStore() {
@@ -91,38 +226,53 @@ function newToken(prefix, id) {
   return `${id}-${prefix}`;
 }
 
-// ─── Load Participants from CSV ───────────────────────────────────────────────
+// ─── Load Participants from the configured source ────────────────────────────
 
-function loadParticipants() {
-  if (!fs.existsSync(CSV_FILE)) {
-    console.error(`❌ CSV not found: ${CSV_FILE}`);
-    process.exit(1);
+async function loadParticipants() {
+  let rows = null;
+  let source = '';
+
+  if (PARTICIPANTS_URL) {
+    rows = await fetchRemoteRows();
+    source = PARTICIPANTS_URL;
+  } else if (fs.existsSync(PARTICIPANTS_FILE)) {
+    rows = readLocalRows();
+    source = PARTICIPANTS_FILE;
   }
 
-  const content = fs.readFileSync(CSV_FILE, 'utf8');
-  const rows = parseCsv(content);
+  if (!rows) {
+    console.warn('⚠️  No participant source configured.');
+    console.warn('    Set PARTICIPANTS_URL (Apps Script endpoint) or PARTICIPANTS_FILE (CSV/JSON export).');
+    return { participants: [], tokenStore: loadTokenStore() };
+  }
 
   // Load persisted QR tokens
   const tokenStore = loadTokenStore();
   let tokenStoreModified = false;
 
-  const participants = rows
-    .filter(r => r['Name'] && r['Name'].trim())
+  const participants = rowsToObjects(rows)
+    .filter(r => field(r, 'Participant Name', 'Name'))
     .map(r => {
-      const id = (r['Registration ID'] || '').trim();
-      const name = r['Name'].trim();
-      const email = (r['Email'] || '').trim();
-      const phone = (r['Mobile Number'] || '').trim();
+      const name = field(r, 'Participant Name', 'Name');
+      const email = field(r, 'Email', 'Email Address');
+      const phone = field(r, 'Mobile Number (WhatsApp)', 'Mobile Number', 'Phone Number', 'Phone', 'Mobile');
+      const id = field(r, 'Registration ID', 'Participant ID', 'ID') || derivedId(email, name);
 
       const defaultCheckin = `${id}-CHK`;
       const defaultFood = `${id}-FOD`;
       const defaultGoodie = `${id}-GDK`;
 
+      const sheetTokens = {
+        checkinToken: field(r, 'Checkin Token', 'Check-in Token'),
+        foodToken: field(r, 'Food Token'),
+        goodieToken: field(r, 'Goodie Token', 'Goodie Kit Token')
+      };
+
       if (!tokenStore[id]) {
         tokenStore[id] = {
-          checkinToken: defaultCheckin,
-          foodToken: defaultFood,
-          goodieToken: defaultGoodie,
+          checkinToken: sheetTokens.checkinToken || defaultCheckin,
+          foodToken: sheetTokens.foodToken || defaultFood,
+          goodieToken: sheetTokens.goodieToken || defaultGoodie,
           checkinRedeemed: false,
           foodRedeemed: false,
           goodieRedeemed: false,
@@ -135,9 +285,9 @@ function loadParticipants() {
       } else {
         // Upgrade legacy long hex tokens to clean readable codes
         if (!tokenStore[id].checkinToken || tokenStore[id].checkinToken.startsWith('CHK-')) {
-          tokenStore[id].checkinToken = defaultCheckin;
-          tokenStore[id].foodToken = defaultFood;
-          tokenStore[id].goodieToken = defaultGoodie;
+          tokenStore[id].checkinToken = sheetTokens.checkinToken || defaultCheckin;
+          tokenStore[id].foodToken = sheetTokens.foodToken || defaultFood;
+          tokenStore[id].goodieToken = sheetTokens.goodieToken || defaultGoodie;
           tokenStoreModified = true;
         }
       }
@@ -147,9 +297,9 @@ function loadParticipants() {
         name,
         email,
         phone,
-        college: (r['College / Institution'] || '').trim(),
-        registrationType: (r['Registration Type'] || '').trim(),
-        ticketType: (r['Ticket Type'] || '').trim(),
+        college: field(r, 'College / Institution', 'College', 'Institution'),
+        registrationType: field(r, 'Registration Type'),
+        ticketType: field(r, 'Ticket Type'),
         ...tokenStore[id],
         // Keep a reference so mutations are reflected in tokenStore
         _storeRef: tokenStore[id]
@@ -161,11 +311,13 @@ function loadParticipants() {
     console.log(`📝 Updated QR pass codes for participants in ${TOKEN_STORE_FILE}`);
   }
 
-  console.log(`✅ Loaded ${participants.length} participants from CSV`);
+  console.log(`✅ Loaded ${participants.length} participants from ${source}`);
   return { participants, tokenStore };
 }
 
-const { participants, tokenStore } = loadParticipants();
+// Populated at startup by init() from the configured participant source
+let participants = [];
+let tokenStore = {};
 
 // Helper: flush state mutation to disk
 function persistParticipant(participant) {
@@ -681,7 +833,7 @@ const server = http.createServer((req, res) => {
 function startServer(port) {
   server.listen(port, () => {
     console.log(`\n==================================================`);
-    console.log(`🚀 Event QR Portal — Real Data (${participants.length} participants)`);
+    console.log(`🚀 Event QR Portal — ${participants.length} participants loaded`);
     console.log(`🔗 Participant View: http://localhost:${port}`);
     console.log(`🔗 Admin Scanner:    http://localhost:${port}/?page=admin`);
     console.log(`==================================================\n`);
@@ -696,4 +848,14 @@ server.on('error', err => {
   } else { console.error(err); }
 });
 
-startServer(PORT);
+async function init() {
+  const loaded = await loadParticipants();
+  participants = loaded.participants;
+  tokenStore = loaded.tokenStore;
+  startServer(PORT);
+}
+
+init().catch(err => {
+  console.error('❌ Failed to start:', err.message);
+  process.exit(1);
+});
