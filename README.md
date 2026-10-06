@@ -79,3 +79,47 @@ npm start
 
 - Participant view: `http://localhost:8080` (or `http://localhost:3000`)
 - Admin scanner: `http://localhost:8080/?page=admin`
+
+### Participant data source
+
+No registration data is stored in this repository. The server reads participants from the first source it finds:
+
+| Source | Purpose |
+| --- | --- |
+| `PARTICIPANTS_URL` env | Apps Script / Google Sheets web app endpoint returning JSON |
+| `config.json` → `PARTICIPANTS_URL` | Same, but local and gitignored — makes plain `npm start` work |
+| `PARTICIPANTS_FILE` env or `config.json` → `PARTICIPANTS_FILE` | Local CSV or JSON export (default `./participants.csv`) |
+
+```bash
+# Plain start — uses config.json if present
+npm start
+
+# Or point at an endpoint explicitly (wins over config.json)
+PARTICIPANTS_URL="https://script.google.com/macros/s/.../exec" npm start
+
+# Or a local export
+PARTICIPANTS_FILE=./exports/registrations.csv npm start
+```
+
+`config.json` example (gitignored, do not commit):
+
+```json
+{ "PARTICIPANTS_URL": "https://script.google.com/macros/s/XXXX/exec" }
+```
+
+For a live Google Sheet, paste `ParticipantsApi.gs` into the sheet's Apps Script editor
+(**Extensions → Apps Script**), deploy it as a web app (access: **Anyone**), and use the
+`/exec` URL as `PARTICIPANTS_URL`.
+
+Accepted column names (case-insensitive):
+
+| Field | Accepted headers |
+| --- | --- |
+| ID | `Registration ID`, `Participant ID`, `ID` (auto-generated from email if absent) |
+| Name | `Participant Name`, `Name` |
+| Email | `Email`, `Email Address` |
+| Phone | `Mobile Number (WhatsApp)`, `Mobile Number`, `Phone Number`, `Phone`, `Mobile` |
+| College | `College / Institution`, `College`, `Institution` |
+| Other | `Registration Type`, `Ticket Type`, `Checkin Token`, `Food Token`, `Goodie Token` |
+
+If no source is configured the server still starts, with an empty participant list.
