@@ -45,6 +45,16 @@ function authenticate(f,id='session1') {
   f.requests.findLast(r=>r.method==='getParticipantDashboard').success(data());
 }
 
+test('admin login sends only the entered email and the page has no password field',()=>{
+  const f=fixture({},'admin');
+  f.el('adminEmailInput').value='staff@example.test';f.context.loginAdmin();
+  const request=f.requests.findLast(r=>r.method==='adminStatus');assert.deepEqual(Array.from(request.args),['staff@example.test']);
+  const html=renderHtml(fs.readFileSync(path.join(__dirname,'../Index.html'),'utf8'),'admin');
+  assert.doesNotMatch(html,/adminPasswordInput|adminPasswordGroup/);
+  f.el('adminEmailInput').value='invalid';f.context.loginAdmin();
+  assert.equal(f.requests.filter(r=>r.method==='adminStatus').length,1);
+});
+
 test('lead controls appear only for leads and require confirmation and a reason',()=>{
   const f=fixture({},'admin');vm.runInContext("currentAdminSessionId='admin-session';currentAdminRole='admin';cachedTrackStats=[{track:'Track A'}];",f.context);
   f.el('manualParticipantSearch').value='Person';f.context.searchManualParticipants();

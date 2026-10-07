@@ -1,6 +1,8 @@
 # AWS Community Day event portal
 
-For a one-command practice version, run `npm run demo`. Open the admin link printed in the terminal and use the printed email/password. This uses two fake participants, fresh isolated state, and leaves your real `config.json` and registrations untouched. Keep the terminal open; press Ctrl+C to stop. `npm start` is for your configured real deployment.
+For a one-command practice version, run `npm run demo`. Open the admin link printed in the terminal and enter the printed staff email; no password is required. This uses two fake participants, fresh isolated state, and leaves your real `config.json` and registrations untouched. Keep the terminal open; press Ctrl+C to stop. `npm start` is for your configured real deployment.
+
+Admin access intentionally uses an email allowlist only, as requested. It does not verify email ownership: anyone who knows an active staff email can sign in with that account's permissions. Passwords, OTPs, and Google sign-in are not used. This is not secure authentication for a public event portal.
 
 Participants select their registered name, enter their registered email or Indian phone number, and receive check-in, food, and goodie passes. Their profile shows their assigned track; a sub-admin assigns the track at the event. Authentication uses an exact normalized name and contact match on a single unique row. It deliberately does not use OTPs or prove ownership of an email/phone. Search suggestions cannot authenticate a different, similarly named participant.
 
@@ -19,9 +21,9 @@ Node and the Apps Script portal must use the **same portal deployment and spread
 
 3. As the owner, run `setupSheets` in the editor and authorize it. Existing redemption flags and timestamps are preserved. Pass codes are now shorter (`v4-` plus 32 hex characters). This replaces prior `v3` codes, so old downloaded tickets stop working; ask participants to download fresh tickets. If any new random tokens are later exposed, run `rotatePassTokens` once.
 4. Use the `Participants` schema below and add authorized organizer Google emails to `Admins`, with `Active` set to `TRUE`. Set the `Role` column to `admin` for lead organizers or `subadmin` for check-in volunteers. Existing accounts with a blank role remain lead admins for compatibility. Duplicate participant IDs or tokens stop access until corrected. Newly added rows with missing IDs/tokens are initialized under the shared lock.
-5. Deploy/update the portal as a web app, executing as the owner. The participant portal can allow anyone. Direct Apps Script admin access requires Google to supply the caller's actual signed-in identity; it never trusts a typed email. When that identity is unavailable, use the password-authenticated Node admin portal. [Google documents the identity limitation for deployments executing as the developer.](https://developers.google.com/apps-script/reference/base/session)
+5. Deploy/update the portal as a web app, executing as the owner, with access for anyone. Both the direct Apps Script and Node admin pages accept a typed email and validate it against the active `Admins` sheet rows. Neither verifies ownership of that email.
 6. In the **old public export project**, deploy the retirement version of `ParticipantsApi.gs` or disable that deployment. Merely changing the local file does not disable an already published endpoint.
-7. Configure Node using the portal's `/exec` URL (not the old export URL), the same `BRIDGE_SECRET`, and admin password hashes as described below. Keep the old local `participant_tokens.json` until migration completes: Node imports its recorded redemptions into the sheet before serving requests. Unmatched or ambiguous legacy IDs stop startup so historical redemption flags are never silently discarded. Track capacities are imported only when a sheet capacity does not already exist.
+7. Configure Node using the portal's `/exec` URL (not the old export URL) and the same `BRIDGE_SECRET`. Staff access is configured only in the `Admins` sheet; no password hashes are required. Keep the old local `participant_tokens.json` until migration completes: Node imports its recorded redemptions into the sheet before serving requests. Unmatched or ambiguous legacy IDs stop startup so historical redemption flags are never silently discarded. Track capacities are imported only when a sheet capacity does not already exist.
 
 Participant URL: `.../exec`. Direct Google admin URL: `.../exec?page=admin`.
 
@@ -58,7 +60,7 @@ The practice demo has only **Dummy Event 1** and **Dummy Event 2**, with one sea
 
 ## Node configuration
 
-Requires Node.js 22 or later; no npm packages are required. Run `npm run admin-password` to generate a salted scrypt password hash. Use a unique password of at least 16 characters. The helper accepts stdin so the password does not need to appear in shell command arguments. Treat your terminal as private when entering it.
+Requires Node.js 22 or later; no npm packages are required. Admin login requires only an allowed email, not a password hash.
 
 Create a private local `config.json` (do not commit passwords or secrets):
 
@@ -67,10 +69,6 @@ Create a private local `config.json` (do not commit passwords or secrets):
   "PARTICIPANTS_URL": "https://script.google.com/macros/s/YOUR_PORTAL_DEPLOYMENT/exec",
   "BRIDGE_SECRET": "YOUR_NEW_RANDOM_SECRET",
   "STATE_DIR": "./.runtime",
-  "ADMIN_CREDENTIALS": {
-    "organizer@example.com": "scrypt:YOUR_SALT:YOUR_PASSWORD_HASH",
-    "volunteer@example.com": "scrypt:VOLUNTEER_SALT:VOLUNTEER_PASSWORD_HASH"
-  },
   "ADMIN_ROLES": {
     "organizer@example.com": "admin",
     "volunteer@example.com": "subadmin"
@@ -78,7 +76,7 @@ Create a private local `config.json` (do not commit passwords or secrets):
 }
 ```
 
-`PARTICIPANTS_URL`, `PARTICIPANTS_FILE`, `BRIDGE_SECRET`, `STATE_DIR`, and JSON-encoded `ADMIN_CREDENTIALS`/`ADMIN_ROLES` can also be supplied as environment variables, overriding local config. `PORT` defaults to 3000. There are no default admin credentials. In Sheets mode the email must also be active in the sheet and its sheet role is authoritative; `ADMIN_ROLES` controls local-file mode.
+`PARTICIPANTS_URL`, `PARTICIPANTS_FILE`, `BRIDGE_SECRET`, `STATE_DIR`, and JSON-encoded `ADMIN_ROLES` can also be supplied as environment variables, overriding local config. `PORT` defaults to 3000. In Sheets mode only the `Admins` sheet controls staff access and roles; `ADMIN_ROLES` controls local-file mode. Legacy local `ADMIN_CREDENTIALS` keys remain a fallback email allowlist, but their password hashes are not checked. Hosted mode ignores `ADMIN_CREDENTIALS` completely.
 
 ## Vercel deployment
 
@@ -88,11 +86,11 @@ Vercel uses the exported request handler in `server.js`, not a persistent listen
 2. In Vercel, open **Project > Settings > Environment Variables** and add these for Production (and Preview if you test preview deployments):
    - `PARTICIPANTS_URL`: your portal's Apps Script `/exec` URL.
    - `BRIDGE_SECRET`: exactly the same secret as the Apps Script Script Property; at least 32 characters.
-   - `ADMIN_CREDENTIALS`: a JSON object mapping each staff email to its generated scrypt hash, for example `{"organizer@example.com":"scrypt:YOUR_SALT:YOUR_PASSWORD_HASH"}`. Generate each hash with `npm run admin-password`. The email must also be active in the `Admins` sheet.
+   No `ADMIN_CREDENTIALS` variable is needed. Add staff to the spreadsheet's `Admins` tab using `Email | Name | Active | Role`; set `Active=TRUE` and role `admin` or `subadmin`. An old `ADMIN_CREDENTIALS` variable can be removed; hosted mode ignores it.
 3. Deploy the updated Git commit, or open **Deployments > latest deployment > Redeploy** after changing environment variables.
 4. Open your Vercel domain for participants, or append `/?page=admin` for staff. Test participant sign-in, staff sign-in, and a test participant's single-use check-in.
 
-Missing configuration leaves the public page available but returns a clear setup error for API requests. Admin sessions are checked against current sheet permissions on every action; logout works across server instances. Changing the configured password hashes invalidates existing hosted admin sessions.
+Missing configuration leaves the public page available but returns a clear setup error for API requests. Admin sessions are checked against current sheet permissions on every action; logout works across server instances. Removing/deactivating a staff row blocks its sessions; changing the role applies to subsequent actions. Previous password-based hosted sessions expire on this rollout and staff must sign in again with their sheet email.
 
 If you still have local legacy redemption state to migrate, run the configured local server once before the cloud rollout and verify the sheet. Vercel intentionally does not replay checked-in runtime files during cold starts.
 
@@ -108,7 +106,7 @@ Lead admins set each track's seat capacity and can redeem check-in, food, and go
 
 Sub-admins scan check-in QR codes or use **Manual Participant Check-in** to search by registration ID or registered name. Selecting a record opens its details and track assignment; confirmation saves the check-in exactly once and updates the counts. This manual operation is an authenticated staff workflow and does not make registration IDs valid QR pass codes. Volunteers must verify the participant's identity before confirming. Sub-admins cannot change capacities or redeem food/goodie passes, even by calling the backend directly.
 
-To provision a Node sub-admin, generate a separate hash with `npm run admin-password`, add their email/hash to local `ADMIN_CREDENTIALS`, and set their role to `subadmin` in `ADMIN_ROLES` for local mode or the `Admins` sheet for Sheets mode. Restart Node after changing its configuration. For direct Apps Script access, add the person's Google email to the `Admins` sheet with `Active=TRUE` and `Role=subadmin`; no Node password is used. Account provisioning is through these private configuration sources, not public self-registration.
+To provision a sub-admin in Sheets mode, add their email to the `Admins` sheet with `Active=TRUE` and `Role=subadmin`. They enter that email at `/?page=admin`; no password, Google sign-in, or Vercel configuration change is needed. Removing/deactivating their row blocks their existing sessions. In local-file mode, add their email/role to `ADMIN_ROLES` and restart Node. Account provisioning is through these private configuration sources, not public self-registration.
 
 If the camera is unavailable, staff can upload a QR photo, paste the full `v4-…` pass code, or use manual participant check-in. Camera requests are cancelled on sign-out/stop; a late permission grant cannot restart the camera after logout.
 
@@ -117,17 +115,17 @@ npm start
 npm test
 ```
 
-Participant UI: `http://localhost:3000`. Admin UI: `http://localhost:3000/?page=admin`. Use HTTPS through your hosting platform/reverse proxy for any network deployment, so passwords and session tokens travel encrypted. Camera and clipboard access also depend on the browser's secure-context rules.
+Participant UI: `http://localhost:3000`. Admin UI: `http://localhost:3000/?page=admin`. Use HTTPS through your hosting platform/reverse proxy for any network deployment, so session tokens travel encrypted. HTTPS does not prove ownership of a typed email. Camera and clipboard access also depend on the browser's secure-context rules.
 
 ## Local file mode
 
-Use the example config with `PARTICIPANTS_FILE` pointing at a private CSV/JSON export and supply admin password hashes. This is an independent local event database; do not simultaneously operate another backend against that event's passes. The file reloads within 30 seconds. Unique registration IDs are recommended; otherwise a stable ID uses the normalized name, email, and phone together. Duplicate IDs or ambiguous logins are rejected.
+Use the example config with `PARTICIPANTS_FILE` pointing at a private CSV/JSON export and supply the staff email/role allowlist in `ADMIN_ROLES`. This is an independent local event database; do not simultaneously operate another backend against that event's passes. The file reloads within 30 seconds. Unique registration IDs are recommended; otherwise a stable ID uses the normalized name, email, and phone together. Duplicate IDs or ambiguous logins are rejected.
 
 Accepted headers include `Registration ID`/`Participant ID`/`ID`, `Participant Name`/`Name`, `Email`/`Email Address`, and `Mobile Number (WhatsApp)`/`Mobile Number`/`Phone Number`/`Phone`/`Mobile`. College and ticket metadata are optional. Redeemed booleans/timestamps imported from the source or legacy state are preserved. Existing source tokens are replaced with locally generated random tokens; predictable ID alternatives are not accepted.
 
 The `.runtime` directory contains private redemption state, sessions, capacities, and audit records. Writes use a flushed temporary file and atomic rename; failure is returned to the caller without updating in-memory redemption state. An exclusive writer lock refuses a second process for the same state directory. Local mode is intentionally a single-server deployment. Do not create separate state directories to scale local mode: use the shared Sheets backend instead.
 
-Back up the complete runtime directory and never restore a stale snapshot during a live event. Missing/corrupt initialized state stops startup. After a crash, check that the PID in `.runtime/writer.lock` is no longer running before removing **only that lock file**. Restore missing state from its backup; do not delete the initialization marker to bypass the check. In Sheets mode separate Node frontends may have separate runtime directories; their participant sessions and redemptions still share the sheet. Node admin sessions are local to each frontend, so use sticky routing or sign in on each frontend.
+Back up the complete runtime directory and never restore a stale snapshot during a live event. Missing/corrupt initialized state stops startup. After a crash, check that the PID in `.runtime/writer.lock` is no longer running before removing **only that lock file**. Restore missing state from its backup; do not delete the initialization marker to bypass the check. In Sheets mode separate Node frontends may have separate runtime directories; participant sessions, admin sessions, and redemptions share the sheet. Sticky routing is not required for staff sign-in.
 
 ## Sensitive files and rollout
 

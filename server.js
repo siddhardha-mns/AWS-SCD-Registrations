@@ -8,6 +8,8 @@ const { StateStore } = require('./state-store');
 const TRACKS = ['Track A', 'Track B', 'Track C', 'Track D'];
 const normalizeName = value => String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
 const normalizeEmail = value => String(value || '').trim().toLowerCase();
+const ADMIN_LOGIN_MODE = 'email-allowlist-v1';
+const ADMIN_SESSION_VERSION = crypto.createHash('sha256').update(ADMIN_LOGIN_MODE).digest('hex');
 function phone(value) {
   const text = String(value || '').trim();
   if (!/^\+?[\d\s().-]+$/.test(text)) return '';
@@ -136,7 +138,7 @@ async function createApp(config = {}) {
     if (entry.count > max || attempts.size > 10000) throw new Error('Too many requests. Please wait one minute.');
   }
   function session(id, role) {
-    if(serverless&&role==='admin'){
+    if(remote&&role==='admin'){
       if(typeof id!=='string'||!/^[-a-zA-Z0-9]{64,100}$/.test(id))throw new Error('Session expired. Please log in again.');
       return {bridgeSessionId:id}; // Every privileged action validates this in the shared backend.
     }
@@ -146,10 +148,14 @@ async function createApp(config = {}) {
       throw new Error('Session expired. Please log in again.');
     }
     if (value.role !== role) throw new Error('Session expired. Please log in again.');
-    if (role === 'admin' && value.credential !== config.ADMIN_CREDENTIALS?.[value.email]) throw new Error('Session expired. Please log in again.');
-    if (role === 'admin' && !remote) value.accessRole = config.ADMIN_ROLES?.[value.email] || 'admin';
+    if (role === 'admin' && value.loginMode !== ADMIN_LOGIN_MODE) throw new Error('Session expired. Please log in again.');
+    if (role === 'admin') value.accessRole = localAdminRole(value.email);
     if (role === 'admin' && !['admin','subadmin'].includes(value.accessRole)) throw new Error('Admin authentication required.');
     return value;
+  }
+  function localAdminRole(email){
+    if(Object.hasOwn(config.ADMIN_ROLES||{},email))return config.ADMIN_ROLES[email];
+    return Object.hasOwn(config.ADMIN_CREDENTIALS||{},email)?'admin':'';
   }
   function newSession(role, identity) {
     const id = crypto.randomBytes(32).toString('hex');
@@ -206,8 +212,7 @@ async function createApp(config = {}) {
     });
   }
   const forward = (method, args) => bridgeRequest(remote, config.BRIDGE_SECRET, method, args);
-  const credentialVersion = () => crypto.createHash('sha256').update(JSON.stringify(Object.entries(config.ADMIN_CREDENTIALS||{}).sort(([a],[b])=>a.localeCompare(b)))).digest('hex');
-  const forwardAdmin = (auth, method, args) => serverless ? forward('bridgeAdminRpc',[auth.bridgeSessionId,credentialVersion(),method,args]) : forward(method,args);
+  const forwardAdmin = (auth, method, args) => forward('bridgeAdminRpc',[auth.bridgeSessionId,ADMIN_SESSION_VERSION,method,args]);
   async function importRemoteLegacy() {
     if (!remote || serverless) return;
     const file = config.LEGACY_STATE_FILE || path.join(__dirname,'participant_tokens.json');
@@ -250,20 +255,16 @@ async function createApp(config = {}) {
       if (remote) return forward('logoutParticipant', [id]);
       store.transaction(data => { if (data.sessions[id]?.role === 'participant') delete data.sessions[id]; }); return {ok:true};
     },
-    async adminStatus([email, password], context) {
+    async adminStatus([email], context) {
       throttle('admin:' + context.ip, 5);
-      const credentials = config.ADMIN_CREDENTIALS || {};
-      const encoded = credentials[normalizeEmail(email)];
-      const parts = typeof encoded === 'string' ? encoded.split(':') : [];
-      const validFormat = parts.length === 3 && parts[0] === 'scrypt' && /^[a-f0-9]{32}$/.test(parts[1]) && /^[a-f0-9]{128}$/.test(parts[2]);
-      const actual = crypto.scryptSync(String(password || ''), validFormat ? parts[1] : '00000000000000000000000000000000', 64);
-      if (!validFormat || !crypto.timingSafeEqual(actual, Buffer.from(parts[2],'hex'))) throw new Error('Admin authentication failed.');
-      const remoteIdentity = remote ? await forward(serverless?'bridgeCreateAdminSession':'bridgeAdminStatus',serverless?[normalizeEmail(email),credentialVersion()]:[normalizeEmail(email)]) : null;
-      const accessRole = remoteIdentity ? remoteIdentity.accessRole : config.ADMIN_ROLES?.[normalizeEmail(email)] || 'admin';
-      if (!['admin','subadmin'].includes(accessRole)) throw new Error('Admin role is not configured correctly.');
-      return {authorized:true,email:normalizeEmail(email),accessRole,sessionId:serverless?remoteIdentity.sessionId:newSession('admin',{email:normalizeEmail(email),credential:encoded,accessRole})};
+      const normalized=normalizeEmail(email);
+      if(normalized.length>254||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized))throw new Error('Enter a valid admin email address.');
+      const remoteIdentity = remote ? await forward('bridgeCreateAdminSession',[normalized,ADMIN_SESSION_VERSION]) : null;
+      const accessRole = remoteIdentity ? remoteIdentity.accessRole : localAdminRole(normalized);
+      if (!['admin','subadmin'].includes(accessRole)) throw new Error('Access denied. The email is not listed or not active in the Admins sheet.');
+      return {authorized:true,email:normalized,accessRole,sessionId:remote?remoteIdentity.sessionId:newSession('admin',{email:normalized,loginMode:ADMIN_LOGIN_MODE,accessRole})};
     },
-    async logoutAdmin([id]) { if(serverless){session(id,'admin');return forward('bridgeLogoutAdminSession',[id,credentialVersion()]);}store.transaction(data => { if (data.sessions[id]?.role === 'admin') delete data.sessions[id]; }); return {ok:true}; },
+    async logoutAdmin([id]) { if(remote){session(id,'admin');return forward('bridgeLogoutAdminSession',[id,ADMIN_SESSION_VERSION]);}store.transaction(data => { if (data.sessions[id]?.role === 'admin') delete data.sessions[id]; }); return {ok:true}; },
     async getTrackStats([id]) { const auth=session(id,'admin'); if(remote) return forwardAdmin(auth,'bridgeGetTrackStats',[auth.email]); return stats(); },
     async getAdminDashboard([id]) {
       const auth=session(id,'admin');
@@ -386,6 +387,7 @@ function loadConfig(serverless=false){
   const config=!serverless&&fs.existsSync(filename)?JSON.parse(fs.readFileSync(filename,'utf8')):{};
   for(const key of ['PARTICIPANTS_URL','PARTICIPANTS_FILE','BRIDGE_SECRET','STATE_DIR'])if(process.env[key])config[key]=process.env[key];
   for(const key of ['ADMIN_CREDENTIALS','ADMIN_ROLES','TRACK_CATALOG','COMMON_SESSIONS'])if(process.env[key]){
+    if(serverless&&key==='ADMIN_CREDENTIALS')continue;
     try{config[key]=JSON.parse(process.env[key]);}catch{throw new Error('Invalid JSON in '+key+' environment variable.');}
   }
   if(serverless)config.SERVERLESS=true;

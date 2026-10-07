@@ -1,6 +1,5 @@
 const fs = require('node:fs');
 const path = require('node:path');
-const crypto = require('node:crypto');
 const { createApp } = require('../server');
 
 function clearInactivePracticeData(base) {
@@ -32,17 +31,11 @@ async function main() {
     { ID: 'DEMO1', Name: 'Person One', Email: 'one@example.test', Phone: '9990000001', College: 'Demo College', 'Ticket Type': 'Practice Ticket' },
     { ID: 'DEMO2', Name: 'Person Two', Email: 'two@example.test', Phone: '9990000002', College: 'Demo College', 'Ticket Type': 'Practice Ticket' }
   ]));
-  const password = crypto.randomBytes(12).toString('base64url');
-  function hash() {
-    const salt = crypto.randomBytes(16).toString('hex');
-    return 'scrypt:' + salt + ':' + crypto.scryptSync(password, salt, 64).toString('hex');
-  }
   const app = await createApp({
     PARTICIPANTS_FILE: filename,
     STATE_DIR: path.join(directory, 'state'),
     LEGACY_STATE_FILE: path.join(directory, 'no-legacy.json'),
     LEGACY_LIMITS_FILE: path.join(directory, 'no-limits.json'),
-    ADMIN_CREDENTIALS: { 'lead@example.test': hash(), 'staff@example.test': hash() },
     ADMIN_ROLES: { 'lead@example.test': 'admin', 'staff@example.test': 'subadmin' },
     TRACK_BOOKING_OPEN: false,
     TRACK_CATALOG: ['Dummy Event 1','Dummy Event 2'].map(id=>({id,title:id,capacity:1,description:'Demo only — the actual event details will be added later.',sessions:[{title:'Practice workshop',speaker:'Demo Speaker',time:'Demo schedule'}]})),
@@ -58,8 +51,8 @@ async function main() {
     console.log('\nPractice version is ready. Fake participants only.\n');
     console.log('Open: http://localhost:3000/?page=admin');
     console.log('Admin email: lead@example.test');
-    console.log('Password: ' + password);
-    console.log('\nSub-admin email: staff@example.test (same password)');
+    console.log('No password is required.');
+    console.log('\nSub-admin email: staff@example.test');
     console.log('Participant page: http://localhost:3000');
     console.log('Participant: Person One / one@example.test');
     console.log('\nKeep this terminal open. Press Ctrl+C to stop.\n');
