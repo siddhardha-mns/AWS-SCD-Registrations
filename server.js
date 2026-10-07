@@ -1,861 +1,382 @@
-const http = require('http');
-const https = require('https');
-const fs = require('fs');
-const path = require('path');
-const crypto = require('crypto');
-const tls = require('tls');
+const http = require('node:http');
+const https = require('node:https');
+const fs = require('node:fs');
+const path = require('node:path');
+const crypto = require('node:crypto');
+const { StateStore } = require('./state-store');
 
-const PORT = parseInt(process.env.PORT || '3000', 10);
 const TRACKS = ['Track A', 'Track B', 'Track C', 'Track D'];
-
-// ─── Participant Data Source (no registration data is checked into the repo) ──
-// Priority:
-//   1. PARTICIPANTS_URL  — Apps Script / Sheets web app endpoint returning JSON
-//   2. PARTICIPANTS_FILE — local CSV or JSON export (default: ./participants.csv)
-// Environment variables win over the local (gitignored) config.json.
-const LOCAL_CONFIG = loadLocalConfig();
-const PARTICIPANTS_URL = (process.env.PARTICIPANTS_URL || LOCAL_CONFIG.PARTICIPANTS_URL || '').trim();
-const PARTICIPANTS_FILE = path.resolve(
-  process.env.PARTICIPANTS_FILE || LOCAL_CONFIG.PARTICIPANTS_FILE || path.join(__dirname, 'participants.csv')
-);
-// Persist generated QR tokens across restarts
-const TOKEN_STORE_FILE = path.join(__dirname, 'participant_tokens.json');
-// Persist track capacity limits (admin-configurable)
-const TRACK_LIMITS_FILE = path.join(__dirname, 'track_limits.json');
-
-// Local, gitignored overrides so `npm start` works without env vars
-function loadLocalConfig() {
-  const file = path.join(__dirname, 'config.json');
-  try {
-    if (fs.existsSync(file)) return JSON.parse(fs.readFileSync(file, 'utf8'));
-  } catch (e) {
-    console.warn(`⚠️  Ignoring unreadable ${path.basename(file)}: ${e.message}`);
-  }
-  return {};
+const normalizeName = value => String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+const normalizeEmail = value => String(value || '').trim().toLowerCase();
+function phone(value) {
+  const text = String(value || '').trim();
+  if (!/^\+?[\d\s().-]+$/.test(text)) return '';
+  const digits = text.replace(/\D/g, '');
+  if (digits.length === 10) return digits;
+  if (digits.length === 12 && digits.startsWith('91')) return digits.slice(2);
+  if (digits.length === 11 && digits.startsWith('0')) return digits.slice(1);
+  return '';
 }
-
-// ─── Track Limits Store ───────────────────────────────────────────────────────
-
-function loadTrackLimits() {
-  try {
-    if (fs.existsSync(TRACK_LIMITS_FILE)) {
-      const data = JSON.parse(fs.readFileSync(TRACK_LIMITS_FILE, 'utf8'));
-      // Ensure every track has an entry
-      TRACKS.forEach(t => { if (!(t in data)) data[t] = 0; });
-      return data;
-    }
-  } catch (e) { /* ignore */ }
-  // Default: 0 = unlimited for all tracks
-  return Object.fromEntries(TRACKS.map(t => [t, 0]));
-}
-
-function saveTrackLimits(limits) {
-  try {
-    fs.writeFileSync(TRACK_LIMITS_FILE, JSON.stringify(limits, null, 2), 'utf8');
-  } catch (e) { console.error('Failed to save track limits:', e.message); }
-}
-
-// Mutable limits object (mutated by setTrackLimit RPC)
-const trackLimits = loadTrackLimits();
-
-// ─── CSV Parsing (zero dependencies) ─────────────────────────────────────────
-
-function parseCsvLine(line) {
-  const result = [];
-  let current = '';
-  let inQuotes = false;
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-    if (ch === '"') {
-      if (inQuotes && line[i + 1] === '"') { current += '"'; i++; }
-      else { inQuotes = !inQuotes; }
-    } else if (ch === ',' && !inQuotes) {
-      result.push(current.trim());
-      current = '';
-    } else {
-      current += ch;
-    }
-  }
-  result.push(current.trim());
-  return result;
-}
-
-function parseCsv(content) {
-  const lines = content.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n').filter(l => l.trim());
-  if (lines.length === 0) return [];
-  const headers = parseCsvLine(lines[0]);
-  return lines.slice(1).map(line => {
-    const values = parseCsvLine(line);
-    const obj = {};
-    headers.forEach((h, i) => { obj[h] = (values[i] || '').trim(); });
-    return obj;
-  });
-}
-
-// Accepts an array, or an object wrapping the array (participants/rows/data/values)
-// or Google Sheets `values` output. Returns plain row objects.
-function extractRows(payload) {
-  if (Array.isArray(payload)) return payload;
-  if (payload && typeof payload === 'object') {
-    for (const key of ['participants', 'rows', 'data', 'values']) {
-      if (Array.isArray(payload[key])) return payload[key];
-    }
-  }
-  throw new Error('Unexpected participants payload: expected an array of rows.');
-}
-
-function rowsToObjects(rows) {
-  if (!rows.length) return [];
-  if (Array.isArray(rows[0])) {
-    const headers = rows[0].map(h => String(h == null ? '' : h).trim());
-    return rows.slice(1).map(r => {
-      const obj = {};
-      headers.forEach((h, i) => { obj[h] = r[i] == null ? '' : r[i]; });
-      return obj;
-    });
-  }
-  return rows.filter(r => r && typeof r === 'object');
-}
-
-// Looks up a field by any of the accepted header spellings (case/space insensitive)
+const newToken = () => 'v4-' + crypto.randomBytes(16).toString('hex');
+const redeemed = value => value === true || value instanceof Date || /^(true|yes|1)$/i.test(String(value)) || /^\d{4}-\d{2}-\d{2}/.test(String(value));
 function field(row, ...names) {
-  const keys = Object.keys(row);
   for (const name of names) {
-    const target = name.trim().toLowerCase();
-    const hit = keys.find(k => k.trim().toLowerCase() === target);
-    if (hit !== undefined) {
-      const value = row[hit];
-      if (value !== undefined && value !== null && String(value).trim() !== '') {
-        return String(value).trim();
-      }
-    }
+    const key = Object.keys(row).find(k => k.trim().toLowerCase() === name.toLowerCase());
+    if (key !== undefined && row[key] !== null && row[key] !== undefined && String(row[key]).trim()) return String(row[key]).trim();
   }
   return '';
 }
-
-// System trust bundles. Google serves a cross-signed chain that Node's built-in
-// roots alone can't verify on some machines, so the system bundle is merged in.
-function trustedCa() {
-  const ca = [...tls.rootCertificates];
-  const candidates = [
-    process.env.NODE_EXTRA_CA_CERTS,
-    '/etc/ssl/cert.pem',
-    '/etc/ssl/certs/ca-certificates.crt',
-    '/etc/pki/tls/certs/ca-bundle.crt'
-  ].filter(Boolean);
-  for (const file of candidates) {
-    try {
-      if (fs.existsSync(file) && fs.statSync(file).size > 0) ca.push(fs.readFileSync(file));
-    } catch (e) { /* ignore */ }
+function parseCsv(text) {
+  const rows = []; let row = [], cell = '', quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === '"') { if (quoted && text[i + 1] === '"') { cell += '"'; i++; } else quoted = !quoted; }
+    else if (c === ',' && !quoted) { row.push(cell); cell = ''; }
+    else if ((c === '\n' || c === '\r') && !quoted) {
+      if (c === '\r' && text[i + 1] === '\n') i++;
+      row.push(cell); if (row.some(v => v.trim())) rows.push(row); row = []; cell = '';
+    } else cell += c;
   }
-  return ca;
+  if (quoted) throw new Error('Unclosed CSV quote.');
+  if (cell || row.length) { row.push(cell); rows.push(row); }
+  const headers = (rows.shift() || []).map(h => h.replace(/^\uFEFF/, '').trim());
+  return rows.map(values => Object.fromEntries(headers.map((h, i) => [h, values[i] || ''])));
 }
-
-function httpsGetJson(url, redirectsLeft = 5) {
-  return new Promise((resolve, reject) => {
-    if (redirectsLeft < 0) return reject(new Error('Too many redirects fetching participant source.'));
-    const req = https.get(
-      url,
-      { headers: { Accept: 'application/json' }, ca: trustedCa(), timeout: 20000 },
-      res => {
-        const location = res.headers.location;
-        if (res.statusCode >= 300 && res.statusCode < 400 && location) {
-          res.resume();
-          return resolve(httpsGetJson(new URL(location, url).toString(), redirectsLeft - 1));
-        }
-        if (res.statusCode !== 200) {
-          res.resume();
-          return reject(new Error(`Participant source responded ${res.statusCode} (${url})`));
-        }
-        let body = '';
-        res.setEncoding('utf8');
-        res.on('data', chunk => { body += chunk; });
-        res.on('end', () => {
-          try { resolve(JSON.parse(body)); }
-          catch (e) { reject(new Error('Participant source did not return valid JSON.')); }
-        });
-      }
-    );
-    req.on('timeout', () => req.destroy(new Error(`Participant source timed out (${url})`)));
-    req.on('error', reject);
+function extractRows(payload) {
+  if (payload && payload.ok === false) throw new Error('Participant source rejected the request.');
+  const rows = Array.isArray(payload) ? payload : payload && (payload.participants || payload.rows || payload.data || payload.values);
+  if (!Array.isArray(rows)) throw new Error('Invalid participant source.');
+  if (Array.isArray(rows[0])) return rows.slice(1).map(r => Object.fromEntries(rows[0].map((h, i) => [h, r[i]])));
+  return rows;
+}
+function prepareRows(rows) {
+  const ids = new Set();
+  return rows.filter(r => r && field(r, 'Participant Name', 'Name')).map(r => {
+    const name = field(r, 'Participant Name', 'Name');
+    const email = field(r, 'Email', 'Email Address');
+    const mobile = field(r, 'Mobile Number (WhatsApp)', 'Mobile Number', 'Phone Number', 'Phone', 'Mobile');
+    const explicitId = field(r, 'Registration ID', 'Participant ID', 'ID');
+    const id = explicitId || 'P-' + crypto.createHash('sha256').update(JSON.stringify([normalizeName(name), normalizeEmail(email), phone(mobile)])).digest('hex').slice(0, 32);
+    const legacyId = explicitId || 'P-' + crypto.createHash('sha1').update(normalizeEmail(email || name)).digest('hex').slice(0, 8).toUpperCase();
+    if (ids.has(id) || ['__proto__','constructor','prototype'].includes(id)) throw new Error('Duplicate or invalid participant ID: fix the source before serving tickets.');
+    ids.add(id);
+    return { id, legacyId, name, email, phone: mobile, college: field(r, 'College / Institution', 'College', 'Institution'), ticketType: field(r, 'Ticket Type'), registrationType: field(r, 'Registration Type'), source: r };
   });
 }
-
-async function fetchRemoteRows() {
-  const payload = await httpsGetJson(PARTICIPANTS_URL);
-  if (payload && payload.ok === false) {
-    throw new Error(payload.error || 'Participant source returned an error.');
-  }
-  return extractRows(payload);
+function renderHtml(template, page) {
+  const participant = page !== 'admin';
+  let html = template.replace(/<\?\s*if\s*\(\s*page\s*===\s*'participant'\s*\)\s*\{\s*\?>([\s\S]*?)<\?\s*\}\s*else\s*\{\s*\?>([\s\S]*?)<\?\s*\}\s*\?>/g, (_, a, b) => participant ? a : b);
+  html = html.replace(/<\?\s*for\s*\([^?]+\)\s*\{\s*\?>\s*<option><\?=\s*tracks\[i\]\s*\?><\/option>\s*<\?\s*\}\s*\?>/g, TRACKS.map(t => `<option>${t}</option>`).join(''));
+  html = html.replace(/<\?=\s*page\s*===\s*'admin'\s*\?\s*'Admin Scanner'\s*:\s*'Participant'\s*\?>/g, participant ? 'Participant' : 'Admin Scanner');
+  html = html.replace(/<div id="topRight">[\s\S]*?<\/div>/, `<div id="topRight"><a class="corner-link" href="${participant ? '/?page=admin' : '/'}">${participant ? 'Admin' : 'Participant Portal'}</a></div>`);
+  return html.replace('</head>', `<script>
+    window.NODE_PORTAL = true;
+    function runner(success, failure) { return new Proxy({}, {get: (_, key) => {
+      if(key === 'withSuccessHandler') return fn => runner(fn, failure);
+      if(key === 'withFailureHandler') return fn => runner(success, fn);
+      return async (...args) => { try {
+        const response = await fetch('/api/rpc', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({method:key,args}), cache:'no-store'});
+        const result = await response.json();
+        if (!result.ok) throw new Error(result.error || 'Request failed.');
+        if(success) success(result.data);
+      } catch(error) { if(failure) failure(error); else console.error(error.message); } };
+    }}); }
+    window.google = {script:{run:runner()}};
+  </script></head>`);
 }
-
-// Stable ID for sheets that have no ID column (derived from email, else name)
-function derivedId(email, name) {
-  const basis = String(email || name || '').trim().toLowerCase();
-  if (!basis) return '';
-  return 'P-' + crypto.createHash('sha1').update(basis).digest('hex').slice(0, 8).toUpperCase();
-}
-
-function readLocalRows() {
-  if (!fs.existsSync(PARTICIPANTS_FILE)) return null;
-  const content = fs.readFileSync(PARTICIPANTS_FILE, 'utf8');
-  if (PARTICIPANTS_FILE.toLowerCase().endsWith('.json')) {
-    return extractRows(JSON.parse(content));
-  }
-  return parseCsv(content);
-}
-
-// ─── Token Store (persisted to disk) ─────────────────────────────────────────
-
-function loadTokenStore() {
-  try {
-    if (fs.existsSync(TOKEN_STORE_FILE)) {
-      return JSON.parse(fs.readFileSync(TOKEN_STORE_FILE, 'utf8'));
-    }
-  } catch (e) { /* ignore */ }
-  return {};
-}
-
-function saveTokenStore(store) {
-  try {
-    fs.writeFileSync(TOKEN_STORE_FILE, JSON.stringify(store, null, 2), 'utf8');
-  } catch (e) { console.error('Failed to save token store:', e.message); }
-}
-
-function newToken(prefix, id) {
-  return `${id}-${prefix}`;
-}
-
-// ─── Load Participants from the configured source ────────────────────────────
-
-async function loadParticipants() {
-  let rows = null;
-  let source = '';
-
-  if (PARTICIPANTS_URL) {
-    rows = await fetchRemoteRows();
-    source = PARTICIPANTS_URL;
-  } else if (fs.existsSync(PARTICIPANTS_FILE)) {
-    rows = readLocalRows();
-    source = PARTICIPANTS_FILE;
-  }
-
-  if (!rows) {
-    console.warn('⚠️  No participant source configured.');
-    console.warn('    Set PARTICIPANTS_URL (Apps Script endpoint) or PARTICIPANTS_FILE (CSV/JSON export).');
-    return { participants: [], tokenStore: loadTokenStore() };
-  }
-
-  // Load persisted QR tokens
-  const tokenStore = loadTokenStore();
-  let tokenStoreModified = false;
-
-  const participants = rowsToObjects(rows)
-    .filter(r => field(r, 'Participant Name', 'Name'))
-    .map(r => {
-      const name = field(r, 'Participant Name', 'Name');
-      const email = field(r, 'Email', 'Email Address');
-      const phone = field(r, 'Mobile Number (WhatsApp)', 'Mobile Number', 'Phone Number', 'Phone', 'Mobile');
-      const id = field(r, 'Registration ID', 'Participant ID', 'ID') || derivedId(email, name);
-
-      const defaultCheckin = `${id}-CHK`;
-      const defaultFood = `${id}-FOD`;
-      const defaultGoodie = `${id}-GDK`;
-
-      const sheetTokens = {
-        checkinToken: field(r, 'Checkin Token', 'Check-in Token'),
-        foodToken: field(r, 'Food Token'),
-        goodieToken: field(r, 'Goodie Token', 'Goodie Kit Token')
-      };
-
-      if (!tokenStore[id]) {
-        tokenStore[id] = {
-          checkinToken: sheetTokens.checkinToken || defaultCheckin,
-          foodToken: sheetTokens.foodToken || defaultFood,
-          goodieToken: sheetTokens.goodieToken || defaultGoodie,
-          checkinRedeemed: false,
-          foodRedeemed: false,
-          goodieRedeemed: false,
-          track: '',
-          checkedInAt: '',
-          foodRedeemedAt: '',
-          goodieRedeemedAt: ''
-        };
-        tokenStoreModified = true;
-      } else {
-        // Upgrade legacy long hex tokens to clean readable codes
-        if (!tokenStore[id].checkinToken || tokenStore[id].checkinToken.startsWith('CHK-')) {
-          tokenStore[id].checkinToken = sheetTokens.checkinToken || defaultCheckin;
-          tokenStore[id].foodToken = sheetTokens.foodToken || defaultFood;
-          tokenStore[id].goodieToken = sheetTokens.goodieToken || defaultGoodie;
-          tokenStoreModified = true;
-        }
+function bridgeRequest(url, key, method, args) {
+  const payload = JSON.stringify({method, args, timestamp: Date.now(), nonce: crypto.randomBytes(16).toString('hex')});
+  const signature = crypto.createHmac('sha256', key).update(payload).digest('hex');
+  const body = JSON.stringify({payload, signature});
+  return new Promise((resolve, reject) => {
+    const address = new URL(url);
+    if (address.protocol !== 'https:') return reject(new Error('Bridge requires HTTPS.'));
+    const request = https.request(address, {method:'POST', headers:{'Content-Type':'application/json','Content-Length':Buffer.byteLength(body)}, timeout:20000}, response => {
+      if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+        response.resume(); return readRedirect(new URL(response.headers.location, address), 5, resolve, reject);
       }
-
-      return {
-        id,
-        name,
-        email,
-        phone,
-        college: field(r, 'College / Institution', 'College', 'Institution'),
-        registrationType: field(r, 'Registration Type'),
-        ticketType: field(r, 'Ticket Type'),
-        ...tokenStore[id],
-        // Keep a reference so mutations are reflected in tokenStore
-        _storeRef: tokenStore[id]
-      };
+      collect(response, resolve, reject);
     });
+    request.on('timeout', () => request.destroy(new Error('Bridge timed out.')));
+    request.on('error', reject); request.end(body);
+  });
+}
+function collect(response, resolve, reject) {
+  if (response.statusCode !== 200) { response.resume(); return reject(new Error('Bridge request failed.')); }
+  let text = ''; response.setEncoding('utf8');
+  response.on('data', chunk => { text += chunk; if (text.length > 2_000_000) response.destroy(new Error('Bridge response too large.')); });
+  response.on('error', reject);
+  response.on('end', () => { try { const result = JSON.parse(text); if (!result.ok) throw new Error(result.error || 'Bridge rejected request.'); resolve(result.data); } catch (error) { reject(error); } });
+}
+function readRedirect(url, remaining, resolve, reject) {
+  if (url.protocol !== 'https:' || remaining < 0) return reject(new Error('Invalid bridge redirect.'));
+  const request = https.get(url, {timeout:20000}, response => {
+    if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) { response.resume(); return readRedirect(new URL(response.headers.location, url), remaining - 1, resolve, reject); }
+    collect(response, resolve, reject);
+  });
+  request.on('timeout', () => request.destroy(new Error('Bridge timed out.'))); request.on('error', reject);
+}
 
-  if (tokenStoreModified) {
-    saveTokenStore(tokenStore);
-    console.log(`📝 Updated QR pass codes for participants in ${TOKEN_STORE_FILE}`);
+async function createApp(config = {}) {
+  const remote = config.PARTICIPANTS_URL;
+  const catalog = config.TRACK_CATALOG || [];
+  const tracks = catalog.length ? catalog.map(t=>t.id) : TRACKS;
+  if (new Set(tracks).size !== tracks.length || tracks.some(id=>typeof id!=='string'||!id.trim()||['__proto__','constructor','prototype'].includes(id))) throw new Error('Invalid track catalog.');
+  if (remote && (!config.BRIDGE_SECRET || config.BRIDGE_SECRET.length < 32)) throw new Error('A BRIDGE_SECRET of at least 32 characters is required for Google Sheets mode. Redeploy Code.gs first.');
+  const store = new StateStore(config.STATE_DIR || path.join(__dirname, '.runtime'));
+  const attempts = new Map();
+  let people = [], lastRefresh = 0, refreshing;
+  function throttle(key, max = 10) {
+    const now = Date.now();
+    for (const [k, value] of attempts) if (now - value.start > 60000) attempts.delete(k);
+    const entry = attempts.get(key) || {start:now, count:0};
+    entry.count++; attempts.set(key, entry);
+    if (entry.count > max || attempts.size > 10000) throw new Error('Too many requests. Please wait one minute.');
   }
-
-  console.log(`✅ Loaded ${participants.length} participants from ${source}`);
-  return { participants, tokenStore };
-}
-
-// Populated at startup by init() from the configured participant source
-let participants = [];
-let tokenStore = {};
-
-// Helper: flush state mutation to disk
-function persistParticipant(participant) {
-  const ref = participant._storeRef;
-  if (!ref) return;
-  ref.checkinRedeemed = participant.checkinRedeemed;
-  ref.foodRedeemed = participant.foodRedeemed;
-  ref.goodieRedeemed = participant.goodieRedeemed;
-  ref.track = participant.track;
-  ref.checkedInAt = participant.checkedInAt;
-  ref.foodRedeemedAt = participant.foodRedeemedAt;
-  ref.goodieRedeemedAt = participant.goodieRedeemedAt;
-  saveTokenStore(tokenStore);
-}
-
-// ─── Admin List ───────────────────────────────────────────────────────────────
-
-const admins = [
-  { email: 'admin@example.com', name: 'Lead Admin', active: true },
-  { email: 'scanner@example.com', name: 'Scanner Desk', active: true }
-];
-
-const activeSessions = new Map();
-
-// ─── Normalization Helpers ────────────────────────────────────────────────────
-
-function normalizeName(s) {
-  return String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
-}
-function normalizeEmail(s) {
-  return String(s || '').trim().toLowerCase();
-}
-function normalizeDigits(s) {
-  return String(s || '').replace(/\D/g, '');
-}
-function phonesMatch(p1, p2) {
-  const d1 = normalizeDigits(p1);
-  const d2 = normalizeDigits(p2);
-  if (!d1 || !d2) return false;
-  if (d1 === d2) return true;
-  if (d1.length >= 10 && d2.length >= 10) {
-    return d1.slice(-10) === d2.slice(-10);
-  }
-  return false;
-}
-function formatNow() {
-  return new Date().toISOString().replace('T', ' ').substring(0, 19);
-}
-
-function levenshteinDistance(s1, s2) {
-  const m = s1.length, n = s2.length;
-  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
-  for (let i = 0; i <= m; i++) dp[i][0] = i;
-  for (let j = 0; j <= n; j++) dp[0][j] = j;
-  for (let i = 1; i <= m; i++) {
-    for (let j = 1; j <= n; j++) {
-      if (s1[i - 1] === s2[j - 1]) dp[i][j] = dp[i - 1][j - 1];
-      else dp[i][j] = 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
-    }
-  }
-  return dp[m][n];
-}
-
-function wordsMatchOrSimilar(w1, w2) {
-  if (w1 === w2) return true;
-  if (w1.includes(w2) || w2.includes(w1)) return true;
-  const maxLen = Math.max(w1.length, w2.length);
-  if (maxLen <= 3) return w1 === w2;
-  const dist = levenshteinDistance(w1, w2);
-  return dist <= (maxLen > 6 ? 2 : 1);
-}
-
-function namesAreSimilar(inputName, registeredName) {
-  const n1 = normalizeName(inputName);
-  const n2 = normalizeName(registeredName);
-  if (n1 === n2) return true;
-  if (n1.includes(n2) || n2.includes(n1)) return true;
-
-  const t1 = n1.split(/\s+/).filter(Boolean);
-  const t2 = n2.split(/\s+/).filter(Boolean);
-
-  const allT1Matched = t1.length > 0 && t1.every(w1 => t2.some(w2 => wordsMatchOrSimilar(w1, w2)));
-  if (allT1Matched) return true;
-
-  const anyTokenMatch = t1.some(w1 => w1.length >= 3 && t2.some(w2 => wordsMatchOrSimilar(w1, w2)));
-  if (anyTokenMatch) {
-    const totalDist = levenshteinDistance(n1, n2);
-    if (totalDist <= Math.max(3, Math.floor(Math.max(n1.length, n2.length) * 0.35))) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-function namesMatchForLogin(inputName, registeredName) {
-  const n1 = normalizeName(inputName);
-  const n2 = normalizeName(registeredName);
-  if (!n1 || !n2) return false;
-  if (n1 === n2) return true;
-  const t1 = n1.split(/\s+/).filter(Boolean);
-  const t2 = n2.split(/\s+/).filter(Boolean);
-  const forward = t1.every(w1 => t2.some(w2 => wordsMatchOrSimilar(w1, w2)));
-  const backward = t2.every(w2 => t1.some(w1 => wordsMatchOrSimilar(w1, w2)));
-  return forward && backward;
-}
-
-// ─── Track Stats Helper ──────────────────────────────────────────────────────
-
-function computeTrackStats() {
-  const counts = Object.fromEntries(TRACKS.map(t => [t, 0]));
-  for (const p of participants) {
-    if (p.checkinRedeemed && p.track && counts[p.track] !== undefined) {
-      counts[p.track]++;
-    }
-  }
-  return TRACKS.map(t => ({
-    track: t,
-    enrolled: counts[t],
-    limit: trackLimits[t] || 0,          // 0 = unlimited
-    available: trackLimits[t] > 0
-      ? Math.max(0, trackLimits[t] - counts[t])
-      : null,                             // null = unlimited
-    full: trackLimits[t] > 0 && counts[t] >= trackLimits[t]
-  }));
-}
-
-// ─── RPC Handlers ─────────────────────────────────────────────────────────────
-
-const rpcHandlers = {
-
-  getParticipantNames: async ([search]) => {
-    const q = normalizeName(search);
-    const names = participants.map(p => p.name.trim());
-    const unique = [...new Set(names)];
-    if (!q) return unique.slice(0, 50);
-
-    const directMatches = unique.filter(n => normalizeName(n).includes(q));
-    const fuzzyMatches = unique.filter(n => !directMatches.includes(n) && namesAreSimilar(q, n));
-    return [...directMatches, ...fuzzyMatches].slice(0, 50);
-  },
-
-  verifyParticipant: async ([name, credential]) => {
-    const inputName = String(name || '').trim();
-    const cred = String(credential || '').trim();
-
-    if (!inputName) throw new Error('Please select or search your registered name.');
-    if (!cred) throw new Error('Please enter your registered email or phone number.');
-
-    const isEmailInput = cred.includes('@');
-    const normalizedInputEmail = normalizeEmail(cred);
-
-    const credentialMatches = p => {
-      const emailMatches = isEmailInput && normalizeEmail(p.email) === normalizedInputEmail;
-      const phoneMatches = phonesMatch(cred, p.phone);
-      return emailMatches || phoneMatches;
-    };
-
-    const matched = participants.find(p => credentialMatches(p) && namesMatchForLogin(inputName, p.name));
-
-    if (!matched) {
-      const nameExists = participants.some(p => namesAreSimilar(inputName, p.name));
-      if (!nameExists) {
-        throw new Error('Name not found in the registration list. Please check the spelling and try again.');
-      }
-      throw new Error('Verification failed. Please check that the selected name matches the entered email or phone number.');
-    }
-
-    const sessionId = crypto.randomUUID();
-    activeSessions.set(sessionId, {
-      participantId: matched.id,
-      name: matched.name,
-      expiresAt: Date.now() + 3600_000 // 1 hour
-    });
-
-    return {
-      ok: true,
-      sessionId,
-      participant: { id: matched.id, name: matched.name }
-    };
-  },
-
-  getParticipantDashboard: async ([sessionId]) => {
-    const session = activeSessions.get(sessionId);
-    if (!session || Date.now() > session.expiresAt) {
+  function session(id, role) {
+    const value = Object.hasOwn(store.data.sessions,id) ? store.data.sessions[id] : null;
+    if (!value || value.expiresAt <= Date.now()) {
+      if (value) store.transaction(data => { delete data.sessions[id]; });
       throw new Error('Session expired. Please log in again.');
     }
-
-    const p = participants.find(pt => pt.id === session.participantId);
-    if (!p) throw new Error('Participant record not found.');
-
-    return {
-      id: p.id,
-      name: p.name,
-      college: p.college,
-      registrationType: p.registrationType,
-      ticketType: p.ticketType,
-      track: p.track || '',
-      checkedInAt: p.checkedInAt,
-      checkin: { redeemed: p.checkinRedeemed, token: p.checkinToken, redeemedAt: p.checkedInAt },
-      food:   { redeemed: p.foodRedeemed,    token: p.foodToken,    redeemedAt: p.foodRedeemedAt },
-      goodie: { redeemed: p.goodieRedeemed,  token: p.goodieToken,  redeemedAt: p.goodieRedeemedAt }
-    };
-  },
-
-  adminStatus: async ([email]) => {
-    const inputEmail = normalizeEmail(email || '');
-    const admin = admins.find(a => normalizeEmail(a.email) === inputEmail && a.active);
-    return { authorized: !!admin, email: inputEmail };
-  },
-
-  // Returns live track stats: enrolled count, limit, available spots
-  getTrackStats: async () => {
-    return computeTrackStats();
-  },
-
-  // Admin sets capacity limit for a track (0 = unlimited)
-  setTrackLimit: async ([track, limit]) => {
-    if (!TRACKS.includes(track)) throw new Error(`Unknown track: ${track}`);
-    const cap = parseInt(limit, 10);
-    if (isNaN(cap) || cap < 0) throw new Error('Limit must be a non-negative integer (0 = unlimited).');
-    trackLimits[track] = cap;
-    saveTrackLimits(trackLimits);
-    return { ok: true, track, limit: cap, stats: computeTrackStats() };
-  },
-
-  redeemQR: async ([token, adminEmail, track, confirmAction]) => {
-    const raw = String(token || '').trim();
-    if (!raw) throw new Error('No QR token received.');
-
-    const cleanToken = raw.toUpperCase();
-    let found = null;
-    let type = '';
-
-    for (const p of participants) {
-      const pId = p.id.toUpperCase();
-      const pChk = p.checkinToken.toUpperCase();
-      const pFod = p.foodToken.toUpperCase();
-      const pGdk = p.goodieToken.toUpperCase();
-
-      if (cleanToken === pChk || cleanToken === `${pId}-CHK` || cleanToken === `${pId}:CHK`) {
-        found = p; type = 'CHECKIN'; break;
-      }
-      if (cleanToken === pFod || cleanToken === `${pId}-FOD` || cleanToken === `${pId}:FOD`) {
-        found = p; type = 'FOOD'; break;
-      }
-      if (cleanToken === pGdk || cleanToken === `${pId}-GDK` || cleanToken === `${pId}:GDK`) {
-        found = p; type = 'GOODIE'; break;
-      }
-      // If direct registration ID was passed
-      if (cleanToken === pId) {
-        found = p; type = 'CHECKIN'; break;
-      }
-    }
-
-    if (!found) {
-      throw new Error(`Invalid Pass Code (${token}). Not found in registration list.`);
-    }
-
-    const participantInfo = {
-      id: found.id,
-      name: found.name,
-      college: found.college,
-      ticketType: found.ticketType,
-      registrationType: found.registrationType,
-      email: found.email,
-      phone: found.phone
-    };
-
-    if (type === 'CHECKIN') {
-      if (found.checkinRedeemed) {
-        return {
-          ok: false,
-          alreadyRedeemed: true,
-          type: 'Event Check-in',
-          participant: participantInfo,
-          participantName: found.name,
-          participantId: found.id,
-          redeemedAt: found.checkedInAt || 'earlier',
-          track: found.track || '',
-          message: `Already Checked In at ${found.checkedInAt || 'earlier'}${found.track ? ' · Track: ' + found.track : ''}`
-        };
-      }
-      if (!track || !TRACKS.includes(track)) {
-        return {
-          ok: true,
-          needsTrack: true,
-          type: 'Event Check-in',
-          participant: participantInfo,
-          tracks: TRACKS,
-          trackStats: computeTrackStats()  // include live counts + limits
-        };
-      }
-      // Enforce track capacity limit
-      const stats = computeTrackStats();
-      const chosen = stats.find(s => s.track === track);
-      if (chosen && chosen.full) {
-        return {
-          ok: false,
-          trackFull: true,
-          type: 'Event Check-in',
-          participant: participantInfo,
-          track,
-          limit: chosen.limit,
-          enrolled: chosen.enrolled,
-          message: `${track} is at full capacity (${chosen.enrolled}/${chosen.limit}). Please assign a different track.`
-        };
-      }
-      const ts = formatNow();
-      found.checkinRedeemed = true;
-      found.track = track;
-      found.checkedInAt = ts;
-      persistParticipant(found);
-      return {
-        ok: true,
-        type: 'Event Check-in',
-        participant: participantInfo,
-        participantId: found.id,
-        participantName: found.name,
-        track,
-        message: `Successfully checked in and assigned to ${track}.`
-      };
-    }
-
-    if (type === 'FOOD') {
-      if (found.foodRedeemed) {
-        return {
-          ok: false,
-          alreadyRedeemed: true,
-          type: 'Lunch & Meals',
-          participant: participantInfo,
-          participantName: found.name,
-          participantId: found.id,
-          redeemedAt: found.foodRedeemedAt || 'earlier',
-          message: `Meal was already redeemed at ${found.foodRedeemedAt || 'earlier'}`
-        };
-      }
-      if (!confirmAction) {
-        return {
-          ok: true,
-          needsConfirmation: true,
-          type: 'Lunch & Meals',
-          participant: participantInfo,
-          status: 'Available'
-        };
-      }
-      const ts = formatNow();
-      found.foodRedeemed = true;
-      found.foodRedeemedAt = ts;
-      persistParticipant(found);
-      return {
-        ok: true,
-        type: 'Lunch & Meals',
-        participant: participantInfo,
-        participantId: found.id,
-        participantName: found.name,
-        message: 'Lunch voucher successfully redeemed.'
-      };
-    }
-
-    if (type === 'GOODIE') {
-      if (found.goodieRedeemed) {
-        return {
-          ok: false,
-          alreadyRedeemed: true,
-          type: 'Swag & Goodie Kit',
-          participant: participantInfo,
-          participantName: found.name,
-          participantId: found.id,
-          redeemedAt: found.goodieRedeemedAt || 'earlier',
-          message: `Goodie Kit was already redeemed at ${found.goodieRedeemedAt || 'earlier'}`
-        };
-      }
-      if (!confirmAction) {
-        return {
-          ok: true,
-          needsConfirmation: true,
-          type: 'Swag & Goodie Kit',
-          participant: participantInfo,
-          status: 'Available'
-        };
-      }
-      const ts = formatNow();
-      found.goodieRedeemed = true;
-      found.goodieRedeemedAt = ts;
-      persistParticipant(found);
-      return {
-        ok: true,
-        type: 'Swag & Goodie Kit',
-        participant: participantInfo,
-        participantId: found.id,
-        participantName: found.name,
-        message: 'Goodie kit successfully redeemed.'
-      };
-    }
-
-    throw new Error('Unknown QR type.');
+    if (value.role !== role) throw new Error('Session expired. Please log in again.');
+    if (role === 'admin' && value.credential !== config.ADMIN_CREDENTIALS?.[value.email]) throw new Error('Session expired. Please log in again.');
+    if (role === 'admin' && !remote) value.accessRole = config.ADMIN_ROLES?.[value.email] || 'admin';
+    if (role === 'admin' && !['admin','subadmin'].includes(value.accessRole)) throw new Error('Admin authentication required.');
+    return value;
   }
-};
-
-// ─── HTML Template Renderer ───────────────────────────────────────────────────
-
-function renderHtml(templateHtml, page) {
-  const isParticipant = page !== 'admin';
-  let rendered = templateHtml;
-
-  // Process <? if (page === 'participant') { ?> ... <? } else { ?> ... <? } ?>
-  const conditionalRegex = /<\?\s*if\s*\(\s*page\s*===\s*'participant'\s*\)\s*\{\s*\?>([\s\S]*?)<\?\s*\}\s*else\s*\{\s*\?>([\s\S]*?)<\?\s*\}\s*\?>/g;
-  rendered = rendered.replace(conditionalRegex, (_, participantBlock, adminBlock) =>
-    isParticipant ? participantBlock : adminBlock
-  );
-
-  // Process track loops
-  const trackLoopRegex = /<\?\s*for\s*\([^?]+\)\s*\{\s*\?>\s*<option><\?=\s*tracks\[i\]\s*\?><\/option>\s*<\?\s*\}\s*\?>/g;
-  rendered = rendered.replace(trackLoopRegex, () =>
-    TRACKS.map(t => `<option>${t}</option>`).join('')
-  );
-
-  // Process page badge <?= page === 'admin' ? 'Admin Scanner' : 'Participant' ?>
-  rendered = rendered.replace(/<\?=\s*page\s*===\s*'admin'\s*\?\s*'Admin Scanner'\s*:\s*'Participant'\s*\?>/g,
-    isParticipant ? 'Participant' : 'Admin Scanner'
-  );
-
-  // Small top-right corner link (admin de-emphasized, participant portal centric)
-  const navHtml = isParticipant
-    ? `<a href="/?page=admin" class="corner-link" title="Admin scanner">Admin</a>`
-    : `<a href="/" class="corner-link" title="Back to participant portal">&larr; Participant Portal</a>`;
-
-  // google.script.run polyfill
-  const polyfillScript = `
-  <script>
-    (function() {
-      function createRunner(successHandler, failureHandler) {
-        return new Proxy({}, {
-          get(target, prop) {
-            if (prop === 'withSuccessHandler') return (fn) => createRunner(fn, failureHandler);
-            if (prop === 'withFailureHandler') return (fn) => createRunner(successHandler, fn);
-            return async (...args) => {
-              try {
-                const res = await fetch('/api/rpc', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ method: prop, args })
-                });
-                const json = await res.json();
-                if (json.ok) { if (successHandler) successHandler(json.data); }
-                else { if (failureHandler) failureHandler(new Error(json.error || 'Server error')); else console.error(json.error); }
-              } catch (err) {
-                if (failureHandler) failureHandler(err); else console.error(err);
-              }
-            };
-          }
-        });
-      }
-      window.google = window.google || {};
-      window.google.script = window.google.script || {};
-      window.google.script.run = createRunner();
-    })();
-  </script>`;
-
-  rendered = rendered.replace('</head>', polyfillScript + '\n</head>');
-  rendered = rendered.replace(/<div id="topRight">[\s\S]*?<\/div>/, `<div id="topRight">${navHtml}</div>`);
-  return rendered;
-}
-
-// ─── HTTP Server ──────────────────────────────────────────────────────────────
-
-const server = http.createServer((req, res) => {
-  const parsedUrl = new URL(req.url, `http://${req.headers.host}`);
-  const pathname = parsedUrl.pathname;
-
-  if (pathname === '/api/rpc' && req.method === 'POST') {
-    let body = '';
-    req.on('data', chunk => { body += chunk; });
-    req.on('end', async () => {
-      try {
-        const { method, args = [] } = JSON.parse(body || '{}');
-        const handler = rpcHandlers[method];
-        if (!handler) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ ok: false, error: `Unknown RPC method: ${method}` }));
-          return;
-        }
-        const data = await handler(args);
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: true, data }));
-      } catch (err) {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: false, error: err.message || 'Operation failed' }));
-      }
+  function newSession(role, identity) {
+    const id = crypto.randomBytes(32).toString('hex');
+    store.transaction(data => {
+      for (const [key, value] of Object.entries(data.sessions)) if (value.expiresAt <= Date.now()) delete data.sessions[key];
+      data.sessions[id] = {role, ...identity, expiresAt:Date.now() + 3600000};
     });
-    return;
+    return id;
   }
-
-  if (pathname === '/') {
-    const page = parsedUrl.searchParams.get('page') || 'participant';
-    try {
-      const template = fs.readFileSync(path.join(__dirname, 'Index.html'), 'utf8');
-      const html = renderHtml(template, page);
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-      res.end(html);
-    } catch (err) {
-      res.writeHead(500, { 'Content-Type': 'text/plain' });
-      res.end('Error loading Index.html: ' + err.message);
+  async function refresh(force = false) {
+    if (remote || (!force && Date.now() - lastRefresh < 30000)) return;
+    if (refreshing) return refreshing;
+    refreshing = (async () => {
+      const filename = path.resolve(config.PARTICIPANTS_FILE || path.join(__dirname, 'participants.csv'));
+      if (!fs.existsSync(filename)) throw new Error('Configure PARTICIPANTS_FILE before starting the local portal.');
+      const text = fs.readFileSync(filename, 'utf8');
+      const next = prepareRows(filename.endsWith('.json') ? extractRows(JSON.parse(text)) : parseCsv(text));
+      const legacyPath = config.LEGACY_STATE_FILE || path.join(__dirname, 'participant_tokens.json');
+      const legacy = fs.existsSync(legacyPath) ? JSON.parse(fs.readFileSync(legacyPath, 'utf8')) : {};
+      const legacyLimitsPath = config.LEGACY_LIMITS_FILE || path.join(__dirname, 'track_limits.json');
+      const legacyLimits = fs.existsSync(legacyLimitsPath) ? JSON.parse(fs.readFileSync(legacyLimitsPath,'utf8')) : {};
+      store.transaction(data => {
+        for (const track of tracks) if (!Object.hasOwn(data.limits,track)) {
+          const configured=catalog.find(t=>t.id===track)?.capacity;
+          const limit=Number.isSafeInteger(configured)?configured:legacyLimits[track];
+          if(Number.isSafeInteger(limit)&&limit>=0)data.limits[track]=limit;
+        }
+        for (const p of next) {
+          let state = Object.hasOwn(data.participants,p.id) ? data.participants[p.id] : null;
+          if (!state) {
+            if (legacy[p.legacyId] && next.filter(other=>other.legacyId===p.legacyId).length > 1) throw new Error('Legacy participants shared an ID. Assign unique IDs and reconcile redemption flags before migration.');
+            state = data.participants[p.id] = {...legacy[p.id] || legacy[p.legacyId], checkinToken:newToken(), foodToken:newToken(), goodieToken:newToken()};
+          }
+          for(const kind of ['checkin','food','goodie'])if(!/^v4-[a-f0-9]{32}$/.test(state[kind+'Token']||''))state[kind+'Token']=newToken();
+          for (const [kind, header] of [['checkin','Checkin'],['food','Food'],['goodie','Goodie']]) {
+            state[kind + 'Redeemed'] = redeemed(state[kind + 'Redeemed']) || redeemed(field(p.source, header + ' Redeemed'));
+            const timeKey = kind === 'checkin' ? 'checkedInAt' : kind + 'RedeemedAt';
+            state[timeKey] = state[timeKey] || field(p.source, kind === 'checkin' ? 'Checked In At' : header + ' Redeemed At');
+          }
+          state.track = state.track || field(p.source, 'Track');
+        }
+      });
+      people = next; lastRefresh = Date.now();
+    })();
+    try { await refreshing; } finally { refreshing = null; }
+  }
+  function stats(data = store.data) {
+    return tracks.map(track => {
+      const assigned = people.filter(p => data.participants[p.id].track === track);
+      const enrolled = assigned.length;
+      const checkedIn = assigned.filter(p=>data.participants[p.id].checkinRedeemed).length;
+      const limit = data.limits[track] || 0;
+      return {track, enrolled, reserved:enrolled,checkedIn, limit, available:limit ? Math.max(0,limit-enrolled) : null, full:!!limit && enrolled >= limit};
+    });
+  }
+  const forward = (method, args) => bridgeRequest(remote, config.BRIDGE_SECRET, method, args);
+  async function importRemoteLegacy() {
+    if (!remote) return;
+    const file = config.LEGACY_STATE_FILE || path.join(__dirname,'participant_tokens.json');
+    const legacy = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file,'utf8')) : {};
+    const records = Object.entries(legacy).filter(([,p])=>['checkin','food','goodie'].some(k=>redeemed(p[k+'Redeemed']))).map(([id,p])=>({id,checkinRedeemed:redeemed(p.checkinRedeemed),foodRedeemed:redeemed(p.foodRedeemed),goodieRedeemed:redeemed(p.goodieRedeemed),track:p.track||'',checkedInAt:p.checkedInAt||'',foodRedeemedAt:p.foodRedeemedAt||'',goodieRedeemedAt:p.goodieRedeemedAt||''}));
+    for (let i=0;i<records.length;i+=10) await forward('bridgeImportLegacyState',[records.slice(i,i+10)]);
+    const limitFile=config.LEGACY_LIMITS_FILE || path.join(__dirname,'track_limits.json');
+    if(fs.existsSync(limitFile))await forward('bridgeImportLegacyLimits',[JSON.parse(fs.readFileSync(limitFile,'utf8'))]);
+  }
+  const handlers = {
+    async getParticipantNames([search], context) {
+      throttle('search:' + context.ip, 60);
+      if (remote) return forward('getParticipantNames', [search]);
+      const query = normalizeName(search);
+      if (query.length < 2) return [];
+      return [...new Set(people.map(p => p.name))].filter(n => normalizeName(n).includes(query)).slice(0,40);
+    },
+    async verifyParticipant([name, credential], context) {
+      throttle('login:' + context.ip); throttle('identity:' + normalizeName(name));
+      if (remote) return forward('verifyParticipant', [name, credential]);
+      const isEmail = String(credential || '').includes('@');
+      const matches = people.filter(p => normalizeName(name) && normalizeName(name) === normalizeName(p.name) && (isEmail ? normalizeEmail(credential) === normalizeEmail(p.email) : phone(credential) && phone(credential) === phone(p.phone)));
+      if (matches.length !== 1) throw new Error('Verification failed. Check your registered name and contact details.');
+      const p = matches[0];
+      if(store.data.participants[p.id].onHold)throw new Error('Registration on hold. Contact the organizer.');
+      return {ok:true,sessionId:newSession('participant', {participantId:p.id,identity:JSON.stringify([normalizeName(p.name),normalizeEmail(p.email),phone(p.phone)])}),participant:{id:p.id,name:p.name}};
+    },
+    async getParticipantDashboard([id]) {
+      if (remote) return forward('getParticipantDashboard', [id]);
+      const auth = session(id, 'participant');
+      const p = people.find(p => p.id === auth.participantId);
+      if (!p || auth.identity !== JSON.stringify([normalizeName(p.name),normalizeEmail(p.email),phone(p.phone)])) throw new Error('Session expired. Please log in again.');
+      const state = store.data.participants[p.id];
+      if(state.onHold)throw new Error('Registration on hold. Contact the organizer.');
+      const result = {id:p.id,name:p.name,college:p.college,ticketType:p.ticketType,registrationType:p.registrationType,track:state.track || '',checkedInAt:state.checkedInAt};
+      for (const kind of ['checkin','food','goodie']) result[kind] = {token:state[kind+'Token'],redeemed:!!state[kind+'Redeemed'],redeemedAt:state[kind==='checkin'?'checkedInAt':kind+'RedeemedAt']};
+      return result;
+    },
+    async logoutParticipant([id]) {
+      if (remote) return forward('logoutParticipant', [id]);
+      store.transaction(data => { if (data.sessions[id]?.role === 'participant') delete data.sessions[id]; }); return {ok:true};
+    },
+    async adminStatus([email, password], context) {
+      throttle('admin:' + context.ip, 5);
+      const credentials = config.ADMIN_CREDENTIALS || {};
+      const encoded = credentials[normalizeEmail(email)];
+      const parts = typeof encoded === 'string' ? encoded.split(':') : [];
+      const validFormat = parts.length === 3 && parts[0] === 'scrypt' && /^[a-f0-9]{32}$/.test(parts[1]) && /^[a-f0-9]{128}$/.test(parts[2]);
+      const actual = crypto.scryptSync(String(password || ''), validFormat ? parts[1] : '00000000000000000000000000000000', 64);
+      if (!validFormat || !crypto.timingSafeEqual(actual, Buffer.from(parts[2],'hex'))) throw new Error('Admin authentication failed.');
+      const remoteIdentity = remote ? await forward('bridgeAdminStatus', [normalizeEmail(email)]) : null;
+      const accessRole = remoteIdentity ? remoteIdentity.accessRole : config.ADMIN_ROLES?.[normalizeEmail(email)] || 'admin';
+      if (!['admin','subadmin'].includes(accessRole)) throw new Error('Admin role is not configured correctly.');
+      return {authorized:true,email:normalizeEmail(email),accessRole,sessionId:newSession('admin',{email:normalizeEmail(email),credential:encoded,accessRole})};
+    },
+    async logoutAdmin([id]) { store.transaction(data => { if (data.sessions[id]?.role === 'admin') delete data.sessions[id]; }); return {ok:true}; },
+    async getTrackStats([id]) { const auth=session(id,'admin'); if(remote) return forward('bridgeGetTrackStats',[auth.email]); return stats(); },
+    async getAdminDashboard([id]) {
+      const auth=session(id,'admin');
+      if(remote)return forward('bridgeGetAdminDashboard',[auth.email]);
+      const checkedIn=people.filter(p=>store.data.participants[p.id].checkinRedeemed).length;
+      const onHold=people.filter(p=>store.data.participants[p.id].onHold).length;
+      const reserved=people.filter(p=>store.data.participants[p.id].track).length;
+      return {total:people.length,checkedIn,notCheckedIn:people.length-checkedIn,onHold,reserved,tracks:stats(),accessRole:auth.accessRole};
+    },
+    async searchAdminParticipants([search,id],context) {
+      const auth=session(id,'admin');throttle('staff-search:'+context.ip,60);
+      const query=normalizeName(search);if(query.length<2)return [];
+      if(remote)return forward('bridgeSearchParticipants',[search,auth.email]);
+      return people.filter(p=>p.id.toLowerCase()===query||normalizeName(p.name).includes(query)).slice(0,30).map(p=>({id:p.id,name:p.name,college:p.college,ticketType:p.ticketType,onHold:!!store.data.participants[p.id].onHold,checkedIn:store.data.participants[p.id].checkinRedeemed,track:store.data.participants[p.id].track||''}));
+    },
+    async manageParticipant([participantId,id,action,value,reason,confirmed]) {
+      const auth=session(id,'admin');
+      if(remote)return forward('bridgeManageParticipant',[participantId,auth.email,action,value,reason,confirmed]);
+      const role=auth.accessRole;
+      if((action==='track'&&role!=='subadmin')||((action==='hold'||action==='restore')&&role!=='admin'))throw new Error(action==='track'?'Only sub-admins can assign tracks.':'Only lead admins can put registrations on hold or restore them.');
+      if(confirmed!==true||typeof reason!=='string'||!reason.trim()||reason.length>500)throw new Error('Confirmation and a reason (1–500 characters) are required.');
+      if(!people.some(p=>p.id===participantId))throw new Error('Participant not found.');
+      const state=store.data.participants[participantId];
+      if(!['hold','restore','track'].includes(action))throw new Error('Invalid management action.');
+      if(action==='track'){
+        if(state.onHold)throw new Error('Restore the registration before changing its track.');
+        if(!tracks.includes(value))throw new Error('Invalid track.');
+        if(state.track!==value&&stats().find(s=>s.track===value).full)throw new Error('This track is full.');
+      }
+      store.transaction(data=>{
+        const target=data.participants[participantId],before={track:target.track||'',onHold:!!target.onHold};
+        if(action==='track')target.track=value;else target.onHold=action==='hold';
+        if(action==='hold')for(const [key,s] of Object.entries(data.sessions))if(s.role==='participant'&&s.participantId===participantId)delete data.sessions[key];
+        data.audit.push({at:new Date().toISOString(),admin:auth.email,participantId,action:role+'-'+action,reason:reason.trim(),before,after:{track:target.track||'',onHold:!!target.onHold}});
+      });
+      return {ok:true};
+    },
+    async manualCheckin([participantId,id,track,confirmed]) {
+      const auth=session(id,'admin');
+      if(remote)return forward('bridgeManualCheckin',[participantId,auth.email,track,confirmed]);
+      const person=people.find(p=>p.id===participantId);if(!person)throw new Error('Participant not found.');
+      const result=await handlers.redeemQR([store.data.participants[person.id].checkinToken,id,track,confirmed],null,true);
+      return {...result,manualCheckin:true};
+    },
+    async setTrackLimit([track, limit, id]) {
+      const auth=session(id,'admin');
+      if(!remote&&auth.accessRole!=='admin')throw new Error('Only lead admins can change track capacities.');
+      if (!tracks.includes(track) || !Number.isSafeInteger(limit) || limit < 0) throw new Error('Invalid track capacity.');
+      if(remote) return forward('bridgeSetTrackLimit',[track,limit,auth.email]);
+      if(limit>0&&limit<stats().find(s=>s.track===track).enrolled)throw new Error('Capacity cannot be below the number of seats already reserved or checked in.');
+      store.transaction(data=>{data.limits[track]=limit;}); return {ok:true,stats:stats()};
+    },
+    async redeemQR([token, id, track, confirmed],context,manual=false) {
+      const auth=session(id,'admin');
+      if(remote) return forward('bridgeRedeemQR',[token,auth.email,track,confirmed]);
+      let found, kind;
+      for(const p of people) for(const type of ['checkin','food','goodie']) if(store.data.participants[p.id][type+'Token']===token){found=p;kind=type;}
+      if(!found) throw new Error('Invalid QR pass.');
+      if(auth.accessRole==='subadmin'&&kind!=='checkin')throw new Error('Sub-admins can only redeem event check-in passes.');
+      const state=store.data.participants[found.id];
+      if(state.onHold)throw new Error('Registration on hold. Only a lead admin can restore it.');
+      const info={id:found.id,name:found.name,college:found.college,ticketType:found.ticketType,registrationType:found.registrationType};
+      const type={checkin:'Event Check-in',food:'Lunch & Meals',goodie:'Swag & Goodie Kit'}[kind];
+      const base={type,participant:info,participantId:found.id,participantName:found.name};
+      if(state[kind+'Redeemed']) return {...base,ok:false,alreadyRedeemed:true,redeemedAt:state[kind==='checkin'?'checkedInAt':kind+'RedeemedAt'],track:state.track,message:'This pass was already redeemed.'};
+      if(kind!=='checkin'&&!state.checkinRedeemed) throw new Error('Complete event check-in before collecting food or goodies.');
+      if(kind==='checkin'&&state.track) {
+        if(confirmed!==true)return {...base,ok:true,needsConfirmation:true,track:state.track,status:'Track already reserved'};
+        if(track&&track!==state.track)throw new Error('The participant has already selected a track. It cannot be changed.');
+        track=state.track;
+      } else if(kind==='checkin') {
+        if(!tracks.includes(track)||confirmed!==true)return {...base,ok:true,needsTrack:true,canAssignTrack:auth.accessRole==='subadmin',tracks,trackStats:stats()};
+        if(auth.accessRole!=='subadmin')throw new Error('Only sub-admins can assign tracks. Ask a sub-admin to assign the participant first.');
+        const chosen=stats().find(s=>s.track===track);if(chosen.full)return {...base,ok:false,trackFull:true,track,limit:chosen.limit,enrolled:chosen.enrolled,message:'This track is full.'};
+      }
+      if(kind!=='checkin'&&confirmed!==true) return {...base,ok:true,needsConfirmation:true,status:'Available'};
+      store.transaction(data=>{
+        const p=data.participants[found.id]; p[kind+'Redeemed']=true; p[kind==='checkin'?'checkedInAt':kind+'RedeemedAt']=new Date().toISOString();
+        if(kind==='checkin')p.track=track;
+        data.audit.push({at:new Date().toISOString(),admin:auth.email,participantId:found.id,action:manual?'manual-checkin':kind});
+      });
+      return {...base,ok:true,track:kind==='checkin'?track:state.track,message:'Pass successfully redeemed.'};
     }
-    return;
+  };
+  async function rpc(method,args=[],context={ip:'local'}) {
+    if(!Object.hasOwn(handlers,method)||!Array.isArray(args))throw new Error('Unknown request.');
+    await refresh(); return handlers[method](args,context);
   }
-
-  res.writeHead(404, { 'Content-Type': 'text/plain' });
-  res.end('Not found');
-});
-
-function startServer(port) {
-  server.listen(port, () => {
-    console.log(`\n==================================================`);
-    console.log(`🚀 Event QR Portal — ${participants.length} participants loaded`);
-    console.log(`🔗 Participant View: http://localhost:${port}`);
-    console.log(`🔗 Admin Scanner:    http://localhost:${port}/?page=admin`);
-    console.log(`==================================================\n`);
+  try {await refresh(true);await importRemoteLegacy();} catch(error){store.close();throw error;}
+  const server=http.createServer(async(req,res)=>{
+    res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');res.setHeader('X-Frame-Options','DENY');
+    const url=new URL(req.url,'http://localhost');
+    if(req.method==='GET'&&url.pathname==='/') {
+      res.writeHead(200,{'Content-Type':'text/html; charset=utf-8'});return res.end(renderHtml(fs.readFileSync(path.join(__dirname,'Index.html'),'utf8'),url.searchParams.get('page')));
+    }
+    if(req.method!=='POST'||url.pathname!=='/api/rpc'){res.writeHead(404);return res.end();}
+    if(!/^application\/json(?:;|$)/i.test(req.headers['content-type']||'')){res.writeHead(415);return res.end();}
+    if(req.headers.origin){try{if(new URL(req.headers.origin).host!==req.headers.host){res.writeHead(403);return res.end();}}catch{res.writeHead(403);return res.end();}}
+    let body=''; let bytes=0;
+    req.on('data',chunk=>{bytes+=chunk.length;if(bytes>16384){res.writeHead(413);res.end();req.destroy();}else body+=chunk;});
+    req.on('end',async()=>{
+      if(res.writableEnded)return;
+      try {const input=JSON.parse(body);const data=await rpc(input.method,input.args,{ip:req.socket.remoteAddress});res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify({ok:true,data}));}
+      catch(error){res.writeHead(400,{'Content-Type':'application/json'});res.end(JSON.stringify({ok:false,error:error.message}));}
+    });
   });
+  return {server,rpc,close:()=>{server.close();store.close();},store,refresh};
 }
-
-server.on('error', err => {
-  if (err.code === 'EADDRINUSE') {
-    const next = PORT === 3000 ? 8080 : PORT + 1;
-    console.log(`Port ${PORT} busy. Trying ${next}...`);
-    startServer(next);
-  } else { console.error(err); }
-});
-
-async function init() {
-  const loaded = await loadParticipants();
-  participants = loaded.participants;
-  tokenStore = loaded.tokenStore;
-  startServer(PORT);
+async function main() {
+  const filename=path.join(__dirname,'config.json');
+  const config=fs.existsSync(filename)?JSON.parse(fs.readFileSync(filename,'utf8')):{};
+  for(const key of ['PARTICIPANTS_URL','PARTICIPANTS_FILE','BRIDGE_SECRET','STATE_DIR'])if(process.env[key])config[key]=process.env[key];
+  if(process.env.ADMIN_CREDENTIALS)config.ADMIN_CREDENTIALS=JSON.parse(process.env.ADMIN_CREDENTIALS);
+  if(process.env.ADMIN_ROLES)config.ADMIN_ROLES=JSON.parse(process.env.ADMIN_ROLES);
+  if(process.env.TRACK_CATALOG)config.TRACK_CATALOG=JSON.parse(process.env.TRACK_CATALOG);
+  if(process.env.COMMON_SESSIONS)config.COMMON_SESSIONS=JSON.parse(process.env.COMMON_SESSIONS);
+  if(process.env.TRACK_BOOKING_OPEN)config.TRACK_BOOKING_OPEN=process.env.TRACK_BOOKING_OPEN==='true';
+  const app=await createApp(config);
+  app.server.on('error',error=>{console.error(error.message);app.close();process.exitCode=1;});
+  app.server.listen(Number(process.env.PORT||3000),()=>console.log('Portal listening on port '+(process.env.PORT||3000)));
+  for(const signal of ['SIGINT','SIGTERM'])process.once(signal,()=>{app.close();process.exit();});
 }
-
-init().catch(err => {
-  console.error('❌ Failed to start:', err.message);
-  process.exit(1);
-});
+if(require.main===module)main().catch(error=>{console.error('Startup failed: '+error.message);process.exitCode=1;});
+module.exports={createApp,prepareRows,parseCsv,renderHtml,phone};
