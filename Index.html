@@ -51,6 +51,7 @@
       line-height: 1.5;
       min-height: 100vh;
     }
+    #dashboardSection > section.card { display:none !important; }
 
     .wrap {
       max-width: 1060px;
@@ -152,6 +153,24 @@
     h3 { font-size: 18px; }
     p { margin: 0 0 18px; }
     .muted { color: var(--muted); font-size: 14px; line-height: 1.6; }
+    .admin-kpi-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin:20px 0 24px; }
+    .admin-kpi { padding:16px 18px; border:1px solid rgba(255,255,255,.09); border-radius:16px; background:linear-gradient(145deg,rgba(30,41,69,.82),rgba(15,23,42,.62)); box-shadow:0 12px 26px rgba(0,0,0,.16); }
+    .admin-kpi-label { color:#94a3b8; text-transform:uppercase; letter-spacing:.07em; font-size:10px; font-weight:800; }
+    .admin-kpi-value { font-family:'Outfit',sans-serif; font-size:30px; line-height:1.1; font-weight:800; margin-top:7px; color:#fff; }
+    .admin-kpi-note { color:#64748b; font-size:11px; margin-top:5px; }
+    .admin-kpi.ok { border-color:rgba(16,185,129,.28); background:linear-gradient(145deg,rgba(6,78,59,.56),rgba(15,23,42,.68)); }
+    .admin-kpi.warn { border-color:rgba(245,158,11,.28); background:linear-gradient(145deg,rgba(120,53,15,.46),rgba(15,23,42,.68)); }
+    .admin-kpi.danger { border-color:rgba(239,68,68,.28); background:linear-gradient(145deg,rgba(127,29,29,.44),rgba(15,23,42,.68)); }
+    #attendanceSummary { display:grid !important; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px !important; margin:20px 0 24px !important; }
+    #attendanceSummary > div { min-height:92px; display:flex; flex-direction:column; justify-content:center; padding:16px 18px; border-radius:16px; font-size:10px; text-transform:uppercase; letter-spacing:.07em; font-weight:800; background:linear-gradient(145deg,rgba(30,41,69,.82),rgba(15,23,42,.62)); border:1px solid rgba(255,255,255,.09); color:#94a3b8; }
+    #attendanceSummary > div strong { display:block; color:#fff; font-family:'Outfit',sans-serif; font-size:30px; letter-spacing:0; line-height:1.1; margin-top:7px; }
+    #attendanceSummary > div:nth-child(2) { border-color:rgba(16,185,129,.28); }
+    #attendanceSummary > div:nth-child(3) { border-color:rgba(245,158,11,.28); }
+    #attendanceSummary > div:nth-child(4) { border-color:rgba(239,68,68,.28); }
+    .crm-header { display:flex; justify-content:space-between; align-items:flex-end; gap:14px; margin-bottom:14px; }
+    .crm-badge { color:#c4b5fd; background:rgba(99,102,241,.13); border:1px solid rgba(129,140,248,.24); padding:5px 10px; border-radius:999px; font-size:11px; font-weight:800; white-space:nowrap; }
+    @media (max-width:760px) { .admin-kpi-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .crm-header { display:block; } .crm-badge { display:inline-block; margin-top:8px; } }
+    @media (max-width:760px) { #attendanceSummary { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 
     /* Form Fields */
     .input-group {
@@ -846,8 +865,10 @@
             <span id="participantTicketType" class="pill neutral" style="font-size:12px;"></span>
             <span id="trackBadge" class="pill pending">Track: Pending check-in</span>
           </div>
+          <div id="participantTrackStatus" class="muted" style="font-size:12px;margin-top:8px;">Your event team will assign your track.</div>
         </div>
         <div>
+          <button class="secondary" onclick="downloadTicket()" style="padding:8px 14px;font-size:12px;border-radius:8px;">Download Ticket</button>
           <button class="secondary" onclick="logOutParticipant()" style="padding:8px 14px;font-size:12px;border-radius:8px;">
             Switch Participant
           </button>
@@ -856,6 +877,14 @@
     </div>
 
     <div id="dashAlert" class="notice"></div>
+
+    <section class="card" style="margin-bottom:24px;">
+      <h2>Track Assignment</h2>
+      <div style="padding:14px;border:2px solid #f59e0b;border-radius:12px;color:#fbbf24;margin-bottom:16px;font-weight:700;">Choose carefully: you can select only one track. You cannot change your choice after confirmation. Only a lead organizer can make an approved correction.</div>
+      <div id="trackSelectionStatus" class="notice"></div>
+      <div id="commonSessions" style="margin-bottom:18px;"></div>
+      <div id="participantTrackOptions"></div>
+    </section>
 
     <!-- 3 PASS CARDS (With Clean Pass Codes & QR) -->
     <div class="qr-grid">
@@ -910,7 +939,7 @@
   <!-- ================= ADMIN SCANNER ================= -->
   <section id="adminAuthSection" class="login-container card">
     <h2>Admin Scanner Desk</h2>
-    <p class="muted">Access is restricted to authorized volunteer &amp; organizer email addresses listed in the <b>Admins</b> sheet.</p>
+    <p class="muted" id="adminLoginHelp">Sign in with your authorized Google account. On the Node portal, enter your admin email and password.</p>
     
     <div class="input-group">
       <label for="adminEmailInput">Admin Email Address</label>
@@ -920,6 +949,10 @@
       </div>
     </div>
     
+    <div class="input-group" id="adminPasswordGroup">
+      <label for="adminPasswordInput">Admin Password</label>
+      <input id="adminPasswordInput" type="password" autocomplete="current-password">
+    </div>
     <div class="btn-action-center">
       <button onclick="loginAdmin()" style="min-width:180px;">Sign In as Admin</button>
     </div>
@@ -932,8 +965,15 @@
         <div>
           <h2 style="font-size:20px;margin:0;">QR Redemption Desk</h2>
           <span class="pill ok" style="margin-top:4px;">Admin: <span id="activeAdminDisplay"></span></span>
+          <span id="adminRoleBadge" class="pill neutral"></span>
         </div>
         <button class="secondary" onclick="logOutAdmin()" style="padding:6px 12px;font-size:12px;border-radius:8px;">Sign Out</button>
+      </div>
+
+      <div id="attendanceSummary" style="display:flex;gap:14px;flex-wrap:wrap;margin:18px 0;" aria-live="polite">
+        <div class="pill neutral">Registered: <strong id="totalParticipantCount">—</strong></div>
+        <div class="pill ok">Checked In: <strong id="checkedInCount">—</strong></div>
+        <div class="pill pending">Not Checked In: <strong id="notCheckedInCount">—</strong></div>
       </div>
 
       <!-- Scanner Controls -->
@@ -962,13 +1002,24 @@
 
       <!-- Manual Token Entry -->
       <div class="manual-token-box">
-        <label for="manualTokenInput" style="font-size:11px;color:#94a3b8;">Manual Pass Code / Registration ID Entry</label>
+        <label for="manualTokenInput" style="font-size:11px;color:#94a3b8;">Enter the full QR pass code</label>
         <div style="display:flex;gap:8px;margin-top:6px;">
-          <input id="manualTokenInput" placeholder="Enter code e.g. IND-001-CHK or IND-001..." style="padding:10px 12px;font-size:13px;">
+          <input id="manualTokenInput" placeholder="Paste the short v4-… code from the participant’s pass" style="padding:10px 12px;font-size:13px;">
           <button type="button" onclick="submitManualToken()" style="white-space:nowrap;padding:10px 16px;font-size:13px;">Redeem</button>
         </div>
       </div>
     </div>
+  </section>
+
+  <section id="manualCheckinPanel" class="scanner-view hidden card">
+    <h3>Manual Participant Check-in</h3>
+    <p class="muted" style="font-size:12px;">If scanning is unavailable, search by registration ID or registered name, verify the participant, and assign a track.</p>
+    <div style="display:flex;gap:8px;">
+      <input id="manualParticipantSearch" placeholder="Registration ID or participant name" autocomplete="off">
+      <button id="manualSearchBtn" type="button" onclick="searchManualParticipants()">Search</button>
+    </div>
+    <div id="manualSearchAlert" class="notice"></div>
+    <div id="manualParticipantResults" style="margin-top:12px;"></div>
   </section>
 
   <!-- ================= TRACK CAPACITY MANAGEMENT ================= -->
@@ -1031,6 +1082,22 @@
 <script>
 let currentSessionId = null;
 let currentAdminEmail = '';
+let currentAdminSessionId = null;
+let adminEpoch = 0;
+let currentAdminRole = 'admin';
+let cameraEpoch = 0;
+let cameraStarting = false;
+let currentDashboardData = null;
+let trackBookingInFlight = false;
+let participantEpoch = 0;
+let dashboardLoading = false;
+function storedSession(key, value) {
+  try {
+    if (arguments.length === 1) return sessionStorage.getItem(key);
+    if (value) sessionStorage.setItem(key, value); else sessionStorage.removeItem(key);
+  } catch(e) { /* Session still works when browser storage is unavailable. */ }
+  return null;
+}
 let videoStream = null;
 let scanAnimationId = null;
 let currentFacingMode = 'environment';
@@ -1059,6 +1126,7 @@ function copyText(elementId) {
   const el = document.getElementById(elementId);
   if (!el) return;
   const text = el.textContent.trim();
+  if (!navigator.clipboard?.writeText) { alert('Code: ' + text); return; }
   navigator.clipboard.writeText(text).then(() => {
     alert('Copied code: ' + text);
   }).catch(() => {
@@ -1090,14 +1158,17 @@ function renderSuggestions(names, query) {
     return;
   }
 
-  dropdown.innerHTML = suggestionsList.map((name, idx) => {
+  dropdown.replaceChildren();
+  suggestionsList.forEach((name, idx) => {
     const initials = name.split(/\s+/).map(w => w[0]).filter(Boolean).slice(0, 2).join('').toUpperCase();
-    return `
-      <div class="suggestion-item" data-idx="${idx}" onclick="selectParticipantName('${escapeHtml(name).replace(/'/g, "\\'")}')">
-        <div class="suggestion-avatar">${initials}</div>
-        <div class="suggestion-name">${escapeHtml(name)}</div>
-      </div>`;
-  }).join('');
+    const item = document.createElement('div');
+    item.className = 'suggestion-item'; item.dataset.idx = idx;
+    const avatar = document.createElement('div'); avatar.className = 'suggestion-avatar'; avatar.textContent = initials;
+    const label = document.createElement('div'); label.className = 'suggestion-name'; label.textContent = name;
+    item.append(avatar, label);
+    item.addEventListener('click', () => selectParticipantName(name));
+    dropdown.appendChild(item);
+  });
   dropdown.classList.add('open');
 }
 
@@ -1108,7 +1179,8 @@ function loadNameSuggestions() {
     return;
   }
   google.script.run
-    .withSuccessHandler(names => renderSuggestions(names, val))
+    .withSuccessHandler(names => { if (nameInput.value.trim() === val) renderSuggestions(names, val); })
+    .withFailureHandler(err => showAlert('loginAlert', err.message || 'Search failed.'))
     .getParticipantNames(val);
 }
 
@@ -1169,6 +1241,7 @@ function selectParticipantName(name) {
 
 function clearSelectedName() {
   selectedBox.classList.add('hidden');
+  selectedDisplay.textContent = '';
   nameInput.value = '';
   nameInput.focus();
 }
@@ -1188,11 +1261,13 @@ function submitVerification() {
   }
 
   const btn = document.getElementById('verifyBtn');
+  const epoch = ++participantEpoch;
   btn.disabled = true;
   btn.innerHTML = '<span>Verifying...</span>';
 
   google.script.run
     .withSuccessHandler(res => {
+      if (epoch !== participantEpoch) { if (res.sessionId) google.script.run.logoutParticipant(res.sessionId); return; }
       btn.disabled = false;
       btn.innerHTML = '<span>Verify &amp; Continue</span><span>→</span>';
 
@@ -1202,11 +1277,14 @@ function submitVerification() {
       }
 
       currentSessionId = res.sessionId;
+      storedSession('participantSession', currentSessionId);
+      document.getElementById('credential').value = '';
       document.getElementById('loginSection').classList.add('hidden');
       document.getElementById('dashboardSection').classList.remove('hidden');
       loadDashboardData();
     })
     .withFailureHandler(err => {
+      if (epoch !== participantEpoch) return;
       btn.disabled = false;
       btn.innerHTML = '<span>Verify &amp; Continue</span><span>→</span>';
       showAlert('loginAlert', err.message || 'Verification failed. Please check your name and phone/email.');
@@ -1215,32 +1293,48 @@ function submitVerification() {
 }
 
 function loadDashboardData() {
+  if (!currentSessionId || dashboardLoading) return;
+  const session = currentSessionId;
+  const epoch = participantEpoch;
+  dashboardLoading = true;
   google.script.run
-    .withSuccessHandler(renderDashboard)
+    .withSuccessHandler(data => {
+      if (epoch !== participantEpoch || session !== currentSessionId) return;
+      dashboardLoading = false; clearAlert('dashAlert'); renderDashboard(data);
+    })
     .withFailureHandler(err => {
+      if (epoch !== participantEpoch || session !== currentSessionId) return;
+      dashboardLoading = false;
+      if (/session expired|log in again/i.test(err.message || '')) {
+        logOutParticipant(); showAlert('loginAlert', 'Your session expired. Please verify your details again.'); return;
+      }
+      currentDashboardData = null;
+      document.getElementById('dashboardSection').classList.add('hidden');
+      document.getElementById('loginSection').classList.remove('hidden');
+      showAlert('loginAlert', err.message || 'Unable to load your passes.');
       showAlert('dashAlert', 'Session error: ' + (err.message || 'Please log in again.'));
     })
-    .getParticipantDashboard(currentSessionId);
+    .getParticipantDashboard(session);
 }
 
 function renderDashboard(data) {
+  currentDashboardData = data;
+  document.getElementById('loginSection').classList.add('hidden');
+  document.getElementById('dashboardSection').classList.remove('hidden');
   document.getElementById('participantName').textContent = data.name;
   document.getElementById('participantId').textContent = data.id;
-  if (data.college) {
-    document.getElementById('participantCollege').textContent = '📍 ' + data.college;
-  }
-  if (data.ticketType) {
-    document.getElementById('participantTicketType').textContent = data.ticketType;
-  }
+  document.getElementById('participantCollege').textContent = data.college ? '📍 ' + data.college : '';
+  document.getElementById('participantTicketType').textContent = data.ticketType || '';
 
   const trackBadge = document.getElementById('trackBadge');
   if (data.track) {
     trackBadge.className = 'pill ok';
-    trackBadge.textContent = '✓ Checked In · ' + data.track;
+    trackBadge.textContent = (data.checkin.redeemed ? '✓ Checked In · ' : '✓ Track Reserved · ') + data.track;
   } else {
     trackBadge.className = 'pill pending';
-    trackBadge.textContent = 'Track Pending Check-in';
+    trackBadge.textContent = 'Track Assignment Pending';
   }
+  document.getElementById('participantTrackStatus').textContent = data.track ? 'Assigned track: ' + data.track : 'Your event team will assign your track.';
 
   // Pass Codes Display
   document.getElementById('checkinCodeText').textContent = data.checkin.token;
@@ -1281,6 +1375,48 @@ function renderDashboard(data) {
   });
 }
 
+function sessionText(session) {
+  return [session.title, session.speaker ? 'Speaker: ' + session.speaker : '', session.time || '', session.description || ''].filter(Boolean).join(' · ');
+}
+function renderParticipantTracks(data) {
+  const common = document.getElementById('commonSessions'); common.replaceChildren();
+  if (data.commonSessions?.length) {
+    const heading = document.createElement('h3'); heading.textContent = 'Common Sessions — Open to All Tracks'; common.appendChild(heading);
+    data.commonSessions.forEach(session => { const row = document.createElement('p'); row.textContent = sessionText(session); common.appendChild(row); });
+  }
+  const container = document.getElementById('participantTrackOptions'); container.replaceChildren();
+  if (data.track) showAlert('trackSelectionStatus', 'Your reserved track: ' + data.track + '. This selection is final.', 'success');
+  else clearAlert('trackSelectionStatus');
+  if (!data.trackOptions?.length) { const message = document.createElement('p'); message.textContent = 'Track details and booking will be available soon.'; container.appendChild(message); return; }
+  data.trackOptions.forEach(track => {
+    const card = document.createElement('div'); card.style.cssText = 'padding:18px;border:1px solid rgba(255,255,255,.15);border-radius:12px;margin-bottom:14px;';
+    const heading = document.createElement('h3'); heading.textContent = track.title || track.track;
+    const description = document.createElement('p'); description.textContent = track.description || 'Session details will be announced soon.';
+    const availability = document.createElement('p'); availability.textContent = track.limit ? track.available + ' of ' + track.limit + ' seats available' : 'Seat limits will be announced soon.';
+    card.append(heading, description, availability);
+    (track.sessions || []).forEach(session => { const row = document.createElement('p'); row.textContent = sessionText(session); card.appendChild(row); });
+    const button = document.createElement('button'); button.type = 'button';
+    button.disabled = !!data.track || track.full || !track.bookingEnabled || trackBookingInFlight;
+    button.textContent = data.track === track.track ? 'Selected — Choice Final' : data.track ? 'Selection Locked' : track.full ? 'Track Full' : !track.bookingEnabled ? 'Booking Opens Soon' : 'Select This Track';
+    button.addEventListener('click', () => selectTrack(track.track, track.title || track.track)); card.appendChild(button); container.appendChild(card);
+  });
+}
+function selectTrack(track, title) {
+  if (!currentSessionId || !currentDashboardData || currentDashboardData.track || trackBookingInFlight) return;
+  if (!confirm('Select ' + title + '?\n\nYour selection is final and CANNOT be changed.')) return;
+  const session = currentSessionId, epoch = ++participantEpoch;
+  dashboardLoading = false; trackBookingInFlight = true; renderParticipantTracks(currentDashboardData);
+  google.script.run.withSuccessHandler(res => {
+    if (epoch !== participantEpoch || session !== currentSessionId) return;
+    trackBookingInFlight = false; currentDashboardData.track = res.track; renderDashboard(currentDashboardData); loadDashboardData();
+  }).withFailureHandler(err => {
+    if (epoch !== participantEpoch || session !== currentSessionId) return;
+    trackBookingInFlight = false;
+    if (/session expired|log in again/i.test(err.message || '')) { logOutParticipant(); showAlert('loginAlert', 'Please verify your details again.'); return; }
+    renderParticipantTracks(currentDashboardData); showAlert('trackSelectionStatus', err.message || 'Track selection failed.');
+  }).selectParticipantTrack(session, track, true);
+}
+
 function renderQrCard(containerId, badgeId, descId, config) {
   const container = document.getElementById(containerId);
   const badge = document.getElementById(badgeId);
@@ -1311,7 +1447,7 @@ function saveQrImage(containerId, filename) {
   const container = document.getElementById(containerId);
   const img = container.querySelector('img');
   const canvas = container.querySelector('canvas');
-  const dataUrl = img ? img.src : (canvas ? canvas.toDataURL('image/png') : null);
+  const dataUrl = canvas ? canvas.toDataURL('image/png') : (img && img.src ? img.src : null);
 
   if (!dataUrl) {
     alert('QR code image could not be captured.');
@@ -1319,15 +1455,62 @@ function saveQrImage(containerId, filename) {
   }
 
   const link = document.createElement('a');
-  link.download = (filename || 'event-pass') + '.png';
+  link.download = (filename || 'event-pass') + '-' + String(currentDashboardData?.id || '').replace(/[^a-zA-Z0-9_-]/g, '') + '.png';
   link.href = dataUrl;
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
 }
 
+function downloadTicket() {
+  if (!currentDashboardData || !currentSessionId) return;
+  const buttonSession = currentSessionId;
+  const epoch = participantEpoch;
+  google.script.run.withSuccessHandler(data => {
+    if (epoch !== participantEpoch || buttonSession !== currentSessionId) return;
+    renderDashboard(data);
+    const canvas = document.createElement('canvas'); canvas.width = 1000; canvas.height = 1600;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#090d16'; ctx.font = 'bold 42px sans-serif'; ctx.fillText('AWS Community Day', 60, 90, 880);
+    ctx.font = 'bold 32px sans-serif'; ctx.fillText(String(data.name), 60, 155, 880);
+    ctx.font = '22px sans-serif';
+    ctx.fillText('Participant ID: ' + data.id, 60, 200, 880);
+    ctx.fillText(String(data.college || ''), 60, 240, 880);
+    ctx.fillText('Ticket: ' + (data.ticketType || 'Event participant'), 60, 280, 880);
+    ctx.fillText('Track: ' + (data.track || 'Assigned at check-in'), 60, 320, 880);
+    const cards = [['checkinQr', 'Event Check-in', data.checkin], ['foodQr', 'Lunch & Meals', data.food], ['goodieQr', 'Swag & Goodies', data.goodie]];
+    cards.forEach(([id, label, pass], index) => {
+      const y = 380 + index * 370;
+      const element = document.getElementById(id);
+      const qr = element.querySelector('canvas') || element.querySelector('img');
+      if (!qr) throw new Error('QR image unavailable. Please reload your passes.');
+      ctx.imageSmoothingEnabled = false; ctx.drawImage(qr, 60, y, 300, 300);
+      ctx.font = 'bold 28px sans-serif'; ctx.fillText(label, 400, y + 60, 530);
+      ctx.font = '22px sans-serif'; ctx.fillText(pass.redeemed ? 'Already redeemed' : 'Available', 400, y + 105);
+      ctx.font = '16px monospace';
+      const token = String(pass.token); ctx.fillText(token, 400, y + 160, 530);
+    });
+    ctx.font = '18px sans-serif'; ctx.fillText('Redemption is verified at the desk. Each pass can be used once.', 60, 1550, 880);
+    const link = document.createElement('a'); link.download = 'AWS-Ticket-' + String(data.id).replace(/[^a-zA-Z0-9_-]/g, '') + '.png';
+    link.href = canvas.toDataURL('image/png'); document.body.appendChild(link); link.click(); link.remove();
+  }).withFailureHandler(err => {
+    if (epoch !== participantEpoch) return;
+    if (/session expired|log in again/i.test(err.message || '')) { logOutParticipant(); showAlert('loginAlert', 'Please verify your details again.'); }
+    else showAlert('dashAlert', err.message || 'Ticket download failed.');
+  }).getParticipantDashboard(buttonSession);
+}
+
 function logOutParticipant() {
+  const previous = currentSessionId;
+  participantEpoch++; dashboardLoading = false; currentDashboardData = null;
+  storedSession('participantSession', null);
   currentSessionId = null;
+  if (previous) google.script.run.withFailureHandler(err => showAlert('loginAlert', 'Sign-out could not reach the server. Please retry when connected.')).logoutParticipant(previous);
+  ['participantName','participantId','participantCollege','participantTicketType','checkinCodeText','foodCodeText','goodieCodeText','checkinQr','foodQr','goodieQr','checkinDetail','foodDetail','goodieDetail'].forEach(id => document.getElementById(id).replaceChildren());
+  dropdown.replaceChildren(); dropdown.classList.remove('open');
+  document.getElementById('participantTrackStatus').textContent = 'Your event team will assign your track.';
+  clearAlert('dashAlert');
   nameInput.value = '';
   document.getElementById('credential').value = '';
   selectedBox.classList.add('hidden');
@@ -1336,83 +1519,80 @@ function logOutParticipant() {
   document.getElementById('loginSection').classList.remove('hidden');
 }
 
+currentSessionId = storedSession('participantSession');
+if (currentSessionId) loadDashboardData();
+setInterval(() => { if (currentSessionId && !document.hidden) loadDashboardData(); }, 15000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) loadDashboardData(); });
+
 <? } else { ?>
 // ================= ADMIN SCANNER & POPUP LOGIC =================
 
 function loginAdmin() {
   clearAlert('adminAuthAlert');
   const email = document.getElementById('adminEmailInput').value.trim();
+  const password = document.getElementById('adminPasswordInput').value;
+  const epoch = ++adminEpoch;
 
   google.script.run
     .withSuccessHandler(res => {
+      if (epoch !== adminEpoch) { if (res.sessionId) google.script.run.logoutAdmin(res.sessionId); return; }
       if (!res.authorized) {
         showAlert('adminAuthAlert', 'Access denied. The email is not listed or not active in the Admins sheet.');
         return;
       }
       currentAdminEmail = res.email || email;
+      currentAdminSessionId = res.sessionId;
+      currentAdminRole = res.accessRole === 'subadmin' ? 'subadmin' : 'admin';
+      storedSession('adminSession', currentAdminSessionId);
+      storedSession('adminEmail', currentAdminEmail);
+      document.getElementById('adminPasswordInput').value = '';
       document.getElementById('activeAdminDisplay').textContent = currentAdminEmail;
       document.getElementById('adminAuthSection').classList.add('hidden');
       document.getElementById('adminScannerSection').classList.remove('hidden');
       document.getElementById('trackMgmtPanel').classList.remove('hidden');
+      document.getElementById('manualCheckinPanel').classList.remove('hidden');
       loadTrackStats();
       startScanner();
     })
     .withFailureHandler(err => {
+      if (epoch !== adminEpoch) return;
       showAlert('adminAuthAlert', err.message || 'Admin verification failed.');
     })
-    .adminStatus(email);
+    .adminStatus(email, password);
 }
 
-function startScanner() {
-  if (videoStream) return;
+async function startScanner() {
+  if (!currentAdminSessionId || videoStream || cameraStarting) return;
   clearAlert('scanStatusAlert');
-
+  if (!navigator.mediaDevices?.getUserMedia) {
+    showAlert('scanStatusAlert', 'Camera access is unavailable. Use HTTPS, scan a photo, or use manual participant check-in.');
+    return;
+  }
+  const epoch = ++cameraEpoch;
+  const session = currentAdminSessionId;
+  const valid = () => epoch === cameraEpoch && session === currentAdminSessionId;
+  cameraStarting = true;
   const video = document.getElementById('scannerVideo');
   const container = document.getElementById('scannerContainer');
-
-  const constraints = {
-    video: {
-      facingMode: { ideal: currentFacingMode },
-      width: { ideal: 1280 },
-      height: { ideal: 720 }
-    },
-    audio: false
-  };
-
-  navigator.mediaDevices.getUserMedia(constraints)
-    .then(stream => {
-      videoStream = stream;
-      video.srcObject = stream;
-      video.setAttribute('playsinline', true);
-      video.onloadedmetadata = () => {
-        video.play();
-        container.classList.remove('hidden');
-        document.getElementById('startCamBtn').classList.add('hidden');
-        document.getElementById('stopCamBtn').classList.remove('hidden');
-        document.getElementById('switchCamBtn').classList.remove('hidden');
-        requestAnimationFrame(tickScan);
-      };
-    })
-    .catch(err => {
-      console.warn('Initial camera constraint failed, retrying generic video...', err);
-      navigator.mediaDevices.getUserMedia({ video: true, audio: false })
-        .then(stream => {
-          videoStream = stream;
-          video.srcObject = stream;
-          video.setAttribute('playsinline', true);
-          video.onloadedmetadata = () => {
-            video.play();
-            container.classList.remove('hidden');
-            document.getElementById('startCamBtn').classList.add('hidden');
-            document.getElementById('stopCamBtn').classList.remove('hidden');
-            document.getElementById('switchCamBtn').classList.remove('hidden');
-            requestAnimationFrame(tickScan);
-          };
-        })
-        .catch(e => {
-          showAlert('scanStatusAlert', 'Camera access could not be started: ' + (e.message || 'Permission denied') + '. You can click "Scan from Photo" or paste the code below.');
-        });
-    });
+  try {
+    let stream;
+    try { stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: currentFacingMode }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false }); }
+    catch(error) { if (!valid()) return; stream = await navigator.mediaDevices.getUserMedia({video:true,audio:false}); }
+    if (!valid()) { stream.getTracks().forEach(track => track.stop()); return; }
+    videoStream = stream; video.srcObject = stream; video.setAttribute('playsinline', true);
+    video.onloadedmetadata = async () => {
+      if (!valid()) return;
+      try { await video.play(); } catch(error) { if (valid()) { stopScanner(); showAlert('scanStatusAlert', 'Video could not start. Use manual participant check-in.'); } return; }
+      if (!valid()) return;
+      container.classList.remove('hidden');
+      document.getElementById('startCamBtn').classList.add('hidden');
+      document.getElementById('stopCamBtn').classList.remove('hidden');
+      document.getElementById('switchCamBtn').classList.remove('hidden');
+      scanAnimationId = requestAnimationFrame(tickScan);
+    };
+  } catch(error) {
+    if (valid()) showAlert('scanStatusAlert', 'Camera could not start: ' + (error.message || 'Permission denied') + '. Use a photo or manual participant check-in.');
+  } finally { if (valid()) cameraStarting = false; }
 }
 
 function tickScan() {
@@ -1457,6 +1637,7 @@ function tickScan() {
 }
 
 function stopScanner() {
+  cameraEpoch++; cameraStarting = false;
   if (videoStream) {
     videoStream.getTracks().forEach(track => track.stop());
     videoStream = null;
@@ -1466,6 +1647,7 @@ function stopScanner() {
     scanAnimationId = null;
   }
   document.getElementById('scannerContainer').classList.add('hidden');
+  const video = document.getElementById('scannerVideo'); video.srcObject = null; video.onloadedmetadata = null;
   document.getElementById('startCamBtn').classList.remove('hidden');
   document.getElementById('stopCamBtn').classList.add('hidden');
   document.getElementById('switchCamBtn').classList.add('hidden');
@@ -1555,6 +1737,9 @@ function cleanScannedData(raw) {
 }
 
 function handleScannedToken(token) {
+  if (!currentAdminSessionId) return;
+  const session = currentAdminSessionId;
+  const epoch = adminEpoch;
   const cleanToken = cleanScannedData(token);
   if (!cleanToken || cleanToken === lastScannedToken) return;
 
@@ -1564,16 +1749,19 @@ function handleScannedToken(token) {
 
   google.script.run
     .withSuccessHandler(res => {
+      if (epoch !== adminEpoch || session !== currentAdminSessionId) return;
       openRedemptionPopup(res, cleanToken);
     })
     .withFailureHandler(err => {
+      if (epoch !== adminEpoch || session !== currentAdminSessionId) return;
+      if (/session expired|authentication required/i.test(err.message || '')) { logOutAdmin(); showAlert('adminAuthAlert', 'Please sign in again.'); return; }
       showAlert('scanStatusAlert', err.message || 'Pass Code lookup failed.');
     })
-    .redeemQR(cleanToken, currentAdminEmail, '', false);
+    .redeemQR(cleanToken, currentAdminSessionId, '', false);
 }
 
 function openRedemptionPopup(res, token) {
-  currentPopupData = { res, token };
+  currentPopupData = { res, token, participantId: res.manualCheckin ? res.participantId : null };
   const modal = document.getElementById('scanPopupModal');
   const p = res.participant || {};
 
@@ -1607,21 +1795,51 @@ function openRedemptionPopup(res, token) {
     return;
   }
 
+  renderRedemptionCases(res, modal, trackSection, confirmBtn, statusBadge, msgEl);
+}
+
 // ── Track Capacity Management ──────────────────────────────────────────────────
 
 let cachedTrackStats = [];
 
+function renderAdminDashboard(data) {
+  currentAdminRole = data.accessRole === 'subadmin' ? 'subadmin' : 'admin';
+  document.getElementById('adminRoleBadge').textContent = currentAdminRole === 'subadmin' ? 'Check-in Sub-admin' : 'Lead Admin';
+  document.getElementById('totalParticipantCount').textContent = String(data.total);
+  document.getElementById('checkedInCount').textContent = String(data.checkedIn);
+  document.getElementById('notCheckedInCount').textContent = String(data.notCheckedIn);
+  let holdCount = document.getElementById('onHoldCount');
+  if (!holdCount) {
+    const summary = document.getElementById('attendanceSummary');
+    const card = document.createElement('div'); card.textContent = 'On Hold';
+    holdCount = document.createElement('strong'); holdCount.id = 'onHoldCount'; card.appendChild(holdCount); summary.appendChild(card);
+  }
+  holdCount.textContent = String(data.onHold || 0);
+  const panel = document.getElementById('manualCheckinPanel');
+  if (panel && !document.getElementById('crmWorkspaceTitle')) {
+    const heading = document.createElement('div'); heading.id='crmWorkspaceTitle'; heading.style.cssText='display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:10px;';
+    const title=document.createElement('h3'); title.textContent='Participant CRM'; title.style.margin='0';
+    const badge=document.createElement('span'); badge.className='crm-badge'; badge.textContent=currentAdminRole==='admin'?'Lead admin workspace':'Check-in workspace'; heading.append(title,badge); panel.insertBefore(heading,panel.firstChild);
+    const hint=document.createElement('div'); hint.id='leadActionHint'; hint.className='notice'; hint.textContent='Lead admins can put registrations on hold or restore them. Sub-admins assign tracks. Changes require a reason and are logged.'; if(currentAdminRole!=='admin')hint.classList.add('hidden'); panel.insertBefore(hint,heading.nextSibling);
+  }
+  cachedTrackStats = data.tracks || []; renderTrackStats(cachedTrackStats);
+}
+
 function loadTrackStats() {
+  if (!currentAdminSessionId) return;
+  const session = currentAdminSessionId;
   google.script.run
-    .withSuccessHandler(stats => {
-      cachedTrackStats = stats || [];
-      renderTrackStats(cachedTrackStats);
+    .withSuccessHandler(data => {
+      if (session !== currentAdminSessionId) return;
+      renderAdminDashboard(data);
     })
     .withFailureHandler(err => {
+      if (session !== currentAdminSessionId) return;
+      if (/session expired|authentication required/i.test(err.message || '')) { logOutAdmin(); showAlert('adminAuthAlert', 'Please sign in again.'); return; }
       document.getElementById('trackStatsGrid').innerHTML =
         `<div style="color:#f87171;font-size:12px;padding:10px;">Failed to load track data: ${escapeHtml(err.message)}</div>`;
     })
-    .getTrackStats();
+    .getAdminDashboard(currentAdminSessionId);
 }
 
 function renderTrackStats(stats) {
@@ -1636,8 +1854,8 @@ function renderTrackStats(stats) {
     const fillClass = pct >= 100 ? 'danger' : pct >= 80 ? 'warn' : '';
     const chipClass = s.full ? 'full' : '';
     const countLabel = hasLimit
-      ? `${s.enrolled} / ${s.limit} seats`
-      : `${s.enrolled} enrolled · Unlimited`;
+      ? `${s.enrolled} / ${s.limit} seats reserved`
+      : `${s.enrolled} reserved · Unlimited`;
     const availLabel = s.full
       ? `<span style="color:#f87171;font-weight:700;">● FULL</span>`
       : hasLimit
@@ -1654,7 +1872,7 @@ function renderTrackStats(stats) {
         <div class="track-progress-bar">
           <div class="track-progress-fill ${fillClass}" style="width:${pct}%"></div>
         </div>` : '<div style="height:6px;"></div>'}
-        <div class="track-limit-row">
+        ${currentAdminRole === 'admin' ? `<div class="track-limit-row">
           <span>${availLabel}</span>
           <span style="flex:1"></span>
           <label for="trackLimit_${escapeHtml(s.track)}">Limit:</label>
@@ -1667,12 +1885,13 @@ function renderTrackStats(stats) {
             title="0 = unlimited"
           >
           <button class="track-save-btn" onclick="saveTrackLimit('${escapeHtml(s.track)}')">Save</button>
-        </div>
+        </div>` : `<div>${availLabel}</div>`}
       </div>`;
   }).join('');
 }
 
 function saveTrackLimit(track) {
+  if (currentAdminRole !== 'admin') return;
   const input = document.getElementById('trackLimit_' + track);
   if (!input) return;
   const newLimit = parseInt(input.value, 10);
@@ -1692,7 +1911,7 @@ function saveTrackLimit(track) {
       input.disabled = false;
       alert('Failed to save limit: ' + (err.message || 'Unknown error'));
     })
-    .setTrackLimit(track, newLimit);
+    .setTrackLimit(track, newLimit, currentAdminSessionId);
 }
 
 function buildTrackSelectOptions(trackStats) {
@@ -1708,10 +1927,20 @@ function buildTrackSelectOptions(trackStats) {
 
 // ── Popup Case 2: Check-in with Track Selection ────────────────────────────────
 
+function renderRedemptionCases(res, modal, trackSection, confirmBtn, statusBadge, msgEl) {
+
   // Case 2: Check-in (Requires Track Selection)
   if (res.needsTrack) {
     statusBadge.className = 'pill ok';
     statusBadge.textContent = 'Ready for Check-in';
+    if (currentAdminRole !== 'subadmin') {
+      trackSection.classList.add('hidden');
+      msgEl.textContent = 'This participant needs a track assignment. Ask a sub-admin to assign the track, then complete check-in.';
+      confirmBtn.textContent = 'Close';
+      confirmBtn.onclick = closePopupModal;
+      modal.classList.remove('hidden');
+      return;
+    }
     trackSection.classList.remove('hidden');
 
     // Populate track selector with live capacity from server response
@@ -1757,7 +1986,7 @@ function buildTrackSelectOptions(trackStats) {
     statusBadge.className = 'pill ok';
     statusBadge.textContent = 'Available to Redeem';
     trackSection.classList.add('hidden');
-    msgEl.textContent = `Click below to confirm handover of ${res.type}.`;
+    msgEl.textContent = res.track ? 'Reserved track: ' + res.track + '. Confirm event check-in; the reserved seat is already counted.' : `Click below to confirm handover of ${res.type}.`;
     confirmBtn.textContent = `✓ Confirm ${res.type} Redemption`;
     confirmBtn.onclick = executePopupAction;
     modal.classList.remove('hidden');
@@ -1775,22 +2004,27 @@ function buildTrackSelectOptions(trackStats) {
 }
 
 function executePopupAction() {
-  if (!currentPopupData) return;
-  const { res, token } = currentPopupData;
-  const track = document.getElementById('popupTrackSelect').value;
+  if (!currentPopupData || !currentAdminSessionId) return;
+  const session = currentAdminSessionId;
+  const epoch = adminEpoch;
+  const { res, token, participantId } = currentPopupData;
+  const track = res.track || document.getElementById('popupTrackSelect').value;
 
   const btn = document.getElementById('popupConfirmBtn');
   btn.disabled = true;
   btn.textContent = 'Processing...';
 
-  google.script.run
+  const request = google.script.run
     .withSuccessHandler(finalRes => {
+      if (epoch !== adminEpoch || session !== currentAdminSessionId) return;
       btn.disabled = false;
+      if (!finalRes.ok) { if (participantId) finalRes.manualCheckin = true; openRedemptionPopup(finalRes, token); return; }
       closePopupModal();
 
       // Refresh track panel after successful check-in
       if (finalRes.type === 'Event Check-in') {
         loadTrackStats();
+        if (participantId && document.getElementById('manualParticipantSearch').value.trim()) searchManualParticipants();
       }
 
       document.getElementById('scanResultBox').innerHTML = `
@@ -1802,11 +2036,13 @@ function executePopupAction() {
       `;
     })
     .withFailureHandler(err => {
+      if (epoch !== adminEpoch || session !== currentAdminSessionId) return;
       btn.disabled = false;
       showAlert('scanStatusAlert', err.message || 'Redemption execution failed.');
       closePopupModal();
-    })
-    .redeemQR(token, currentAdminEmail, track, true);
+    });
+  if (participantId) request.manualCheckin(participantId, session, track, true);
+  else request.redeemQR(token, session, track, true);
 }
 
 function closePopupModal() {
@@ -1815,13 +2051,100 @@ function closePopupModal() {
 }
 
 function logOutAdmin() {
+  adminEpoch++;
   stopScanner();
+  if (currentAdminSessionId) google.script.run.logoutAdmin(currentAdminSessionId);
+  currentAdminSessionId = null;
+  storedSession('adminSession', null); storedSession('adminEmail', null);
   currentAdminEmail = '';
+  currentAdminRole = 'admin';
+  document.getElementById('activeAdminDisplay').textContent = '';
+  document.getElementById('adminPasswordInput').value = '';
+  ['scanResultBox','popupParticipantName','popupParticipantId','popupCollege','popupContactInfo','popupTicketType','popupRegType','manualParticipantResults','totalParticipantCount','checkedInCount','notCheckedInCount','adminRoleBadge'].forEach(id => document.getElementById(id).replaceChildren());
+  document.getElementById('manualParticipantSearch').value = '';
   cachedTrackStats = [];
   document.getElementById('adminScannerSection').classList.add('hidden');
   document.getElementById('trackMgmtPanel').classList.add('hidden');
+  document.getElementById('manualCheckinPanel').classList.add('hidden');
   document.getElementById('adminAuthSection').classList.remove('hidden');
   clearAlert('adminAuthAlert');
+  closePopupModal();
+}
+
+if (!window.NODE_PORTAL) document.getElementById('adminPasswordGroup').classList.add('hidden');
+currentAdminSessionId = storedSession('adminSession');
+currentAdminEmail = storedSession('adminEmail') || '';
+if (currentAdminSessionId) {
+  const restoringSession = currentAdminSessionId;
+  google.script.run.withSuccessHandler(data => {
+    if (restoringSession !== currentAdminSessionId) return;
+    document.getElementById('activeAdminDisplay').textContent = currentAdminEmail;
+    document.getElementById('adminAuthSection').classList.add('hidden');
+    document.getElementById('adminScannerSection').classList.remove('hidden');
+    document.getElementById('trackMgmtPanel').classList.remove('hidden');
+    document.getElementById('manualCheckinPanel').classList.remove('hidden');
+    renderAdminDashboard(data);
+  }).withFailureHandler(() => logOutAdmin()).getAdminDashboard(currentAdminSessionId);
+}
+
+setInterval(() => { if (currentAdminSessionId && !document.hidden) loadTrackStats(); }, 15000);
+
+function searchManualParticipants() {
+  if (!currentAdminSessionId) return;
+  const query = document.getElementById('manualParticipantSearch').value.trim();
+  if (query.length < 2) { showAlert('manualSearchAlert', 'Enter at least two characters of the name or ID.'); return; }
+  const session = currentAdminSessionId, epoch = adminEpoch;
+  clearAlert('manualSearchAlert'); document.getElementById('manualParticipantResults').replaceChildren();
+  google.script.run.withSuccessHandler(people => {
+    if (epoch !== adminEpoch || session !== currentAdminSessionId || query !== document.getElementById('manualParticipantSearch').value.trim()) return;
+    if (!people.length) { showAlert('manualSearchAlert', 'No matching registered participants.'); return; }
+    const container = document.getElementById('manualParticipantResults');
+    people.forEach(person => {
+      const row = document.createElement('div'); row.style.cssText = 'display:flex;align-items:center;gap:12px;padding:12px 0;border-top:1px solid rgba(255,255,255,.1)';
+      const label = document.createElement('span'); label.style.flex = '1';
+      label.textContent = person.name + ' · ' + person.id + (person.college ? ' · ' + person.college : '') + (person.checkedIn ? ' · Already checked in' : ' · Not checked in');
+      const button = document.createElement('button'); button.type = 'button'; button.textContent = person.checkedIn ? 'View Check-in' : 'Check In';
+      button.disabled=!!person.onHold;
+      label.textContent += ' | Track: ' + (person.track || 'Unassigned');
+      if(person.onHold)label.textContent+=' · Registration On Hold (seat retained)';
+      button.addEventListener('click', () => inspectManualParticipant(person.id)); row.append(label,button);
+      if(currentAdminRole==='admin'){
+        const hold=document.createElement('button');hold.type='button';hold.textContent=person.onHold?'Restore Registration':'Put On Hold';
+        hold.addEventListener('click',()=>manageRegistration(person,person.onHold?'restore':'hold',''));
+        row.appendChild(hold);
+      }
+      if(currentAdminRole==='subadmin'&&!person.onHold){
+        const select=document.createElement('select');
+        cachedTrackStats.forEach(track=>{const option=document.createElement('option');option.value=track.track;option.textContent=track.track+(track.full&&track.track!==person.track?' (Full)':'');option.disabled=track.full&&track.track!==person.track;select.appendChild(option);});
+        select.value=person.track||cachedTrackStats.find(track=>!track.full)?.track||'';
+        const assign=document.createElement('button');assign.type='button';assign.textContent=person.track?'Update Track':'Assign Track';
+        assign.addEventListener('click',()=>manageRegistration(person,'track',select.value));row.append(select,assign);
+      }
+      container.appendChild(row);
+    });
+  }).withFailureHandler(err => { if (epoch === adminEpoch && session === currentAdminSessionId) showAlert('manualSearchAlert', err.message || 'Search failed.'); }).searchAdminParticipants(query, session);
+}
+function inspectManualParticipant(participantId) {
+  if (!currentAdminSessionId) return;
+  const session = currentAdminSessionId, epoch = adminEpoch;
+  google.script.run.withSuccessHandler(res => {
+    if (epoch !== adminEpoch || session !== currentAdminSessionId) return;
+    openRedemptionPopup(res, null);
+  }).withFailureHandler(err => { if (epoch === adminEpoch && session === currentAdminSessionId) showAlert('manualSearchAlert', err.message || 'Participant lookup failed.'); }).manualCheckin(participantId, session, '', false);
+}
+
+function manageRegistration(person,action,value){
+  if(!currentAdminSessionId||(action==='track'?currentAdminRole!=='subadmin':currentAdminRole!=='admin'))return;
+  const reason=prompt(action==='track'?'Reason for assigning this track (required):':'Reason for this lead-admin action (required):');if(!reason||!reason.trim())return;
+  const message=action==='hold'?'Put '+person.name+' on hold? Their seat stays reserved; access and all passes will be blocked.':action==='restore'?'Restore '+person.name+'? They will need to sign in again.':'Assign '+person.name+' to '+value+'? Seat limits still apply.';
+  if(!confirm(message))return;
+  const session=currentAdminSessionId,epoch=adminEpoch;
+  google.script.run.withSuccessHandler(()=>{
+    if(epoch!==adminEpoch||session!==currentAdminSessionId)return;
+    loadTrackStats();searchManualParticipants();showAlert('manualSearchAlert','Registration updated.','success');
+  }).withFailureHandler(err=>{
+    if(epoch===adminEpoch&&session===currentAdminSessionId)showAlert('manualSearchAlert',err.message||'Update failed.');
+  }).manageParticipant(person.id,session,action,value,reason.trim(),true);
 }
 
 <? } ?>

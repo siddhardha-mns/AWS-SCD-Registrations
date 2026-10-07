@@ -1,0 +1,9 @@
+{
+  "PARTICIPANTS_FILE": "./participants.csv",
+  "STATE_DIR": "./.runtime",
+  "ADMIN_CREDENTIALS": {},
+  "ADMIN_ROLES": {},
+  "TRACK_BOOKING_OPEN": false,
+  "TRACK_CATALOG": [],
+  "COMMON_SESSIONS": []
+}

@@ -1,125 +1,120 @@
-# Event QR Portal — Google Apps Script + Google Sheets
+# AWS Community Day event portal
 
-A fast, mobile-friendly participant portal and admin QR redemption desk with **Zero OTP / No Email dependencies**.
+For a one-command practice version, run `npm run demo`. Open the admin link printed in the terminal and use the printed email/password. This uses two fake participants, fresh isolated state, and leaves your real `config.json` and registrations untouched. Keep the terminal open; press Ctrl+C to stop. `npm start` is for your configured real deployment.
 
-## 1. Participant Authentication Flow
+Participants select their registered name, enter their registered email or Indian phone number, and receive check-in, food, and goodie passes. Their profile shows their assigned track; a sub-admin assigns the track at the event. Authentication uses an exact normalized name and contact match on a single unique row. It deliberately does not use OTPs or prove ownership of an email/phone. Search suggestions cannot authenticate a different, similarly named participant.
 
-1. Participant searches and selects their registered name.
-2. Participant enters their registered **Email Address** OR **Phone Number**.
-3. The backend validates that both the selected name and the entered email or phone belong to the **exact same participant row** in the Google Sheet.
-4. If verified, the participant is authenticated and sees their **3 unique, non-guessable QR codes**:
-   - **01 · Check-in QR**
-   - **02 · Food QR**
-   - **03 · Goodie Kit QR**
-5. No emails, no OTPs, and no passwords are used.
+Each pass has an independent random token and can be redeemed once. Check-in is required before collecting food or goodies. Participants can download individual QR PNGs or one complete ticket PNG with their details and all three passes. The dashboard refreshes while visible. Sessions last one hour, survive refresh, and are revoked on sign-out.
 
----
+## Google Sheets deployment (recommended for shared event desks)
 
-## 2. Google Sheets Structure
+Node and the Apps Script portal must use the **same portal deployment and spreadsheet**. Node forwards participant sessions and all redemptions to that backend over signed server-to-server requests; it does not maintain a second redemption database.
 
-### `Participants` Sheet
-Columns:
-```
-Participant ID | Name | Phone | Email | Checkin Token | Food Token | Goodie Token | Checkin Redeemed | Food Redeemed | Goodie Redeemed | Track | Checked In At | Food Redeemed At | Goodie Redeemed At
-```
-- Only **Name**, **Phone**, and **Email** need to be filled manually or from your registration form.
-- The script automatically generates unique `Participant ID` and random `CHK-...`, `FOD-...`, `GDK-...` tokens.
+1. In the portal's spreadsheet Apps Script project, replace `Code.gs` and the HTML file named `Index` with the files in this repository. Do **not** include `ParticipantsApi.gs` in this project; it belongs only in the old export project.
+2. Under **Project Settings → Script Properties**, set `PORTAL_OWNER_EMAIL` to the owner's Google email and `BRIDGE_SECRET` to a new random secret of at least 32 characters. Generate the secret locally with:
 
-### `Admins` Sheet
-Columns:
-```
-Email | Name | Active
-```
-- Enter authorized admin Google account emails and set `Active` to `TRUE`.
+   ```powershell
+   node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
+   ```
 
-### `AuditLog` Sheet
-Columns:
-```
-Timestamp | Admin Email | Action | QR Type | Participant ID | Participant Name | Track | Result | Details
-```
-- Logs all check-ins, redemptions, duplicate scan attempts, and invalid QR scans.
+3. As the owner, run `setupSheets` in the editor and authorize it. Existing redemption flags and timestamps are preserved. Pass codes are now shorter (`v4-` plus 32 hex characters). This replaces prior `v3` codes, so old downloaded tickets stop working; ask participants to download fresh tickets. If any new random tokens are later exposed, run `rotatePassTokens` once.
+4. Use the `Participants` schema below and add authorized organizer Google emails to `Admins`, with `Active` set to `TRUE`. Set the `Role` column to `admin` for lead organizers or `subadmin` for check-in volunteers. Existing accounts with a blank role remain lead admins for compatibility. Duplicate participant IDs or tokens stop access until corrected. Newly added rows with missing IDs/tokens are initialized under the shared lock.
+5. Deploy/update the portal as a web app, executing as the owner. The participant portal can allow anyone. Direct Apps Script admin access requires Google to supply the caller's actual signed-in identity; it never trusts a typed email. When that identity is unavailable, use the password-authenticated Node admin portal. [Google documents the identity limitation for deployments executing as the developer.](https://developers.google.com/apps-script/reference/base/session)
+6. In the **old public export project**, deploy the retirement version of `ParticipantsApi.gs` or disable that deployment. Merely changing the local file does not disable an already published endpoint.
+7. Configure Node using the portal's `/exec` URL (not the old export URL), the same `BRIDGE_SECRET`, and admin password hashes as described below. Keep the old local `participant_tokens.json` until migration completes: Node imports its recorded redemptions into the sheet before serving requests. Unmatched or ambiguous legacy IDs stop startup so historical redemption flags are never silently discarded. Track capacities are imported only when a sheet capacity does not already exist.
 
----
+Participant URL: `.../exec`. Direct Google admin URL: `.../exec?page=admin`.
 
-## 3. Deployment Instructions for Google Apps Script
+`Participants` columns, in this order:
 
-1. Open your Google Sheet (or create a new one).
-2. Click **Extensions → Apps Script**.
-3. In the Apps Script code editor:
-   - Paste the contents of `Code.gs` into the script file (replace any default code).
-   - Click **+ (Add a file) → HTML**, name it `Index` (producing `Index.html`), and paste the contents of `Index.html`.
-4. Click **Save Project** (disk icon).
-5. In the toolbar, select the function `setupSheets` and click **Run**.
-   - Review and grant the required permissions when prompted.
-   - This automatically creates the `Participants`, `Admins`, and `AuditLog` tabs with formatted header columns.
-6. Populate the `Participants` sheet with your attendees (Name, Phone, Email) and `Admins` with authorized admins.
-7. Click **Deploy → New deployment**:
-   - Click the gear icon next to "Select type" and choose **Web app**.
-   - **Description:** `Event QR Portal v2`
-   - **Execute as:** `Me (your email)`
-   - **Who has access:** `Anyone` (or `Anyone with Google account` if internal)
-8. Click **Deploy** and copy the generated **Web App URL** (`.../exec`).
-
-### Portal URLs:
-- **Participant Access:** `https://script.google.com/macros/s/.../exec`
-- **Admin Scanner:** `https://script.google.com/macros/s/.../exec?page=admin`
-
----
-
-## 4. Local Testing Server
-
-A zero-dependency local Node.js preview server is included:
-
-```bash
-# Start local server
-node server.js
-# Or
-npm start
+```text
+Participant ID | Name | Phone | Email | Checkin Token | Food Token | Goodie Token | Checkin Redeemed | Food Redeemed | Goodie Redeemed | Track | Checked In At | Food Redeemed At | Goodie Redeemed At | College / Institution | Ticket Type | Registration Type | Registration On Hold
 ```
 
-- Participant view: `http://localhost:8080` (or `http://localhost:3000`)
-- Admin scanner: `http://localhost:8080/?page=admin`
+The final metadata columns are optional. `Admins` uses `Email | Name | Active | Role`; `AuditLog` records successful redemptions, manual check-ins, and staff track assignments. Track assignments, capacity changes, and redemptions share the Apps Script lock.
 
-### Participant data source
+## Track assignments
 
-No registration data is stored in this repository. The server reads participants from the first source it finds:
+Participants cannot choose or change tracks in their profile. Their pass shows the assigned track, or says the event team will assign it. Only sub-admins can assign or update tracks from the Participant CRM or during check-in. Each assignment requires a reason and confirmation, respects the shared seat limit, and is logged. Lead admins manage holds/restores and capacity; they cannot assign tracks. A lead admin scanning someone who needs a track is prompted to ask a sub-admin to assign one.
 
-| Source | Purpose |
-| --- | --- |
-| `PARTICIPANTS_URL` env | Apps Script / Google Sheets web app endpoint returning JSON |
-| `config.json` → `PARTICIPANTS_URL` | Same, but local and gitignored — makes plain `npm start` work |
-| `PARTICIPANTS_FILE` env or `config.json` → `PARTICIPANTS_FILE` | Local CSV or JSON export (default `./participants.csv`) |
-
-```bash
-# Plain start — uses config.json if present
-npm start
-
-# Or point at an endpoint explicitly (wins over config.json)
-PARTICIPANTS_URL="https://script.google.com/macros/s/.../exec" npm start
-
-# Or a local export
-PARTICIPANTS_FILE=./exports/registrations.csv npm start
-```
-
-`config.json` example (gitignored, do not commit):
+Configure the real track names and capacities in the portal's `TRACK_CATALOG` Script Property (a JSON array). Node configuration alone does not configure the shared Sheets backend. Example local configuration:
 
 ```json
-{ "PARTICIPANTS_URL": "https://script.google.com/macros/s/XXXX/exec" }
+{
+  "TRACK_CATALOG": [
+    {
+      "id": "YOUR_TRACK_ID",
+      "title": "Actual track title",
+      "capacity": 50,
+      "description": "Actual track description"
+    }
+  ]
+}
 ```
 
-For a live Google Sheet, paste `ParticipantsApi.gs` into the sheet's Apps Script editor
-(**Extensions → Apps Script**), deploy it as a web app (access: **Anyone**), and use the
-`/exec` URL as `PARTICIPANTS_URL`.
+This is a configuration example, not the real event schedule. Add one entry per real track, with unique, stable IDs. In Google Sheets, set `TRACK_CATALOG` as a JSON array. Existing saved/admin-set limits take precedence over catalog capacities; verify limits in the admin dashboard. Track choices are not shown to participants.
 
-Accepted column names (case-insensitive):
+The practice demo has only **Dummy Event 1** and **Dummy Event 2**, with one seat each. Stop the old demo with Ctrl+C, then restart `npm run demo`. The restart creates fresh fake attendees and permanently clears old inactive practice directories, including demo passes, sessions, assignments, and audit records. Active demos and real registration data are not cleared. No invitation emails are sent by this change.
 
-| Field | Accepted headers |
-| --- | --- |
-| ID | `Registration ID`, `Participant ID`, `ID` (auto-generated from email if absent) |
-| Name | `Participant Name`, `Name` |
-| Email | `Email`, `Email Address` |
-| Phone | `Mobile Number (WhatsApp)`, `Mobile Number`, `Phone Number`, `Phone`, `Mobile` |
-| College | `College / Institution`, `College`, `Institution` |
-| Other | `Registration Type`, `Ticket Type`, `Checkin Token`, `Food Token`, `Goodie Token` |
+## Node configuration
 
-If no source is configured the server still starts, with an empty participant list.
+Requires Node.js 22 or later; no npm packages are required. Run `npm run admin-password` to generate a salted scrypt password hash. Use a unique password of at least 16 characters. The helper accepts stdin so the password does not need to appear in shell command arguments. Treat your terminal as private when entering it.
+
+Create a local, ignored `config.json`:
+
+```json
+{
+  "PARTICIPANTS_URL": "https://script.google.com/macros/s/YOUR_PORTAL_DEPLOYMENT/exec",
+  "BRIDGE_SECRET": "YOUR_NEW_RANDOM_SECRET",
+  "STATE_DIR": "./.runtime",
+  "ADMIN_CREDENTIALS": {
+    "organizer@example.com": "scrypt:YOUR_SALT:YOUR_PASSWORD_HASH",
+    "volunteer@example.com": "scrypt:VOLUNTEER_SALT:VOLUNTEER_PASSWORD_HASH"
+  },
+  "ADMIN_ROLES": {
+    "organizer@example.com": "admin",
+    "volunteer@example.com": "subadmin"
+  }
+}
+```
+
+`PARTICIPANTS_URL`, `PARTICIPANTS_FILE`, `BRIDGE_SECRET`, `STATE_DIR`, and JSON-encoded `ADMIN_CREDENTIALS`/`ADMIN_ROLES` can also be supplied as environment variables, overriding local config. `PORT` defaults to 3000. There are no default admin credentials. In Sheets mode the email must also be active in the sheet and its sheet role is authoritative; `ADMIN_ROLES` controls local-file mode.
+
+## Admin and sub-admin desks
+
+Lead admins can use participant search results to **Put On Hold** and **Restore Registration**. Each action requires a reason and confirmation, and the action is recorded. A hold preserves the registration, seat, and check-in history, while blocking sign-in and pass redemption. Restoration requires a fresh participant login. Sub-admins can assign or update tracks from search results; assignments require a reason and confirmation, respect capacity, and are recorded. These permissions are also enforced by the backend.
+
+Google Sheets deployments must rerun owner-only `setupSheets` before redeployment to add the final `Registration On Hold` column (blank means active). Existing flags and history are preserved. Waitlisting/seat offers are not implemented yet; full tracks reject new assignments.
+
+Both roles see total registered participants, checked-in participants, participants still awaiting check-in, and current track occupancy. The dashboard refreshes every 15 seconds while visible and immediately after a successful check-in. Search results and counts are restricted to authenticated staff.
+
+Lead admins set each track's seat capacity and can redeem check-in, food, and goodie passes. A capacity of `0` means unlimited. A positive limit cannot be reduced below the number of seats already assigned. Full tracks reject new assignments, including manual ones.
+
+Sub-admins scan check-in QR codes or use **Manual Participant Check-in** to search by registration ID or registered name. Selecting a record opens its details and track assignment; confirmation saves the check-in exactly once and updates the counts. This manual operation is an authenticated staff workflow and does not make registration IDs valid QR pass codes. Volunteers must verify the participant's identity before confirming. Sub-admins cannot change capacities or redeem food/goodie passes, even by calling the backend directly.
+
+To provision a Node sub-admin, generate a separate hash with `npm run admin-password`, add their email/hash to local `ADMIN_CREDENTIALS`, and set their role to `subadmin` in `ADMIN_ROLES` for local mode or the `Admins` sheet for Sheets mode. Restart Node after changing its configuration. For direct Apps Script access, add the person's Google email to the `Admins` sheet with `Active=TRUE` and `Role=subadmin`; no Node password is used. Account provisioning is through these private configuration sources, not public self-registration.
+
+If the camera is unavailable, staff can upload a QR photo, paste the full `v4-…` pass code, or use manual participant check-in. Camera requests are cancelled on sign-out/stop; a late permission grant cannot restart the camera after logout.
+
+```powershell
+npm start
+npm test
+```
+
+Participant UI: `http://localhost:3000`. Admin UI: `http://localhost:3000/?page=admin`. Use HTTPS through your hosting platform/reverse proxy for any network deployment, so passwords and session tokens travel encrypted. Camera and clipboard access also depend on the browser's secure-context rules.
+
+## Local file mode
+
+Use the example config with `PARTICIPANTS_FILE` pointing at a private CSV/JSON export and supply admin password hashes. This is an independent local event database; do not simultaneously operate another backend against that event's passes. The file reloads within 30 seconds. Unique registration IDs are recommended; otherwise a stable ID uses the normalized name, email, and phone together. Duplicate IDs or ambiguous logins are rejected.
+
+Accepted headers include `Registration ID`/`Participant ID`/`ID`, `Participant Name`/`Name`, `Email`/`Email Address`, and `Mobile Number (WhatsApp)`/`Mobile Number`/`Phone Number`/`Phone`/`Mobile`. College and ticket metadata are optional. Redeemed booleans/timestamps imported from the source or legacy state are preserved. Existing source tokens are replaced with locally generated random tokens; predictable ID alternatives are not accepted.
+
+The `.runtime` directory contains private redemption state, sessions, capacities, and audit records. Writes use a flushed temporary file and atomic rename; failure is returned to the caller without updating in-memory redemption state. An exclusive writer lock refuses a second process for the same state directory. Local mode is intentionally a single-server deployment. Do not create separate state directories to scale local mode: use the shared Sheets backend instead.
+
+Back up the complete runtime directory and never restore a stale snapshot during a live event. Missing/corrupt initialized state stops startup. After a crash, check that the PID in `.runtime/writer.lock` is no longer running before removing **only that lock file**. Restore missing state from its backup; do not delete the initialization marker to bypass the check. In Sheets mode separate Node frontends may have separate runtime directories; their participant sessions and redemptions still share the sheet. Node admin sessions are local to each frontend, so use sticky routing or sign in on each frontend.
+
+## Sensitive files and rollout
+
+`config.json`, attendee exports, legacy pass state, capacities, and `.runtime` must stay outside Git tracking. Their local copies remain available for migration. Previous commits still contain the old values: stopping tracking does not erase history. Token rotation and retirement of the public endpoint must happen before the update is considered live. If repository history must also be purged, coordinate a separate history rewrite with everyone sharing the repository.
+
+Automated tests use synthetic data, isolated temporary state, mocked Google services, and simulated browser DOM/canvas behavior. They cover identity mixing, ambiguous IDs, admin impersonation, exact tokens, concurrency, persistence failures, restart/expiry/logout, source refresh, bridge signature/replay rejection, cross-backend redemption, safe name rendering, and ticket downloads. Actual mobile downloads and the redeployed Google web app still require a deployment smoke test.
