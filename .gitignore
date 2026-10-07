@@ -1,7 +1,0 @@
-node_modules/
-.runtime/
-config.json
-participant_tokens.json
-track_limits.json
-participants.csv
-participants.json
