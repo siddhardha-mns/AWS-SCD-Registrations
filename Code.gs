@@ -152,16 +152,18 @@ function adminRole_(email) {
   if(matches.length!==1)return '';
   const role=String(matches[0][3]||'admin').trim().toLowerCase();return ['admin','subadmin'].includes(role)?role:'';
 }
-function adminStatus() {
+function adminStatus(email) {
   return withLock_(()=>{
-    const email=normalizeEmail_(Session.getActiveUser().getEmail());
-    if(!isAdmin_(email))throw new Error('Sign in with an authorized Google account. If Google identity is unavailable, use the Node portal with an admin password.');
-    return {authorized:true,email,accessRole:adminRole_(email),sessionId:saveSession_('admin',{email})};
+    const normalized=normalizeEmail_(email);
+    if(normalized.length>254||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized))throw new Error('Enter a valid admin email address.');
+    if(!isAdmin_(normalized))throw new Error('Access denied. The email is not listed or not active in the Admins sheet.');
+    throttle_('admin-login:'+normalized,10);
+    return {authorized:true,email:normalized,accessRole:adminRole_(normalized),sessionId:saveSession_('admin',{email:normalized,loginMode:'email-allowlist-v1'})};
   });
 }
 function adminAuth_(id) {
   const auth=getSession_(id,'admin');
-  if(normalizeEmail_(Session.getActiveUser().getEmail())!==auth.email||!isAdmin_(auth.email))throw new Error('Admin authentication required.');
+  if(auth.loginMode!=='email-allowlist-v1'||!isAdmin_(auth.email))throw new Error('Admin authentication required.');
   return auth.email;
 }
 function logoutAdmin(id){return withLock_(()=>{const properties=PropertiesService.getScriptProperties();const raw=properties.getProperty('SESSION_'+id);if(raw&&JSON.parse(raw).role==='admin')properties.deleteProperty('SESSION_'+id);return {ok:true};});}

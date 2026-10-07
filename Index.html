@@ -939,7 +939,7 @@
   <!-- ================= ADMIN SCANNER ================= -->
   <section id="adminAuthSection" class="login-container card">
     <h2>Admin Scanner Desk</h2>
-    <p class="muted" id="adminLoginHelp">Sign in with your authorized Google account. On the Node portal, enter your admin email and password.</p>
+    <p class="muted" id="adminLoginHelp">Enter the email listed as active in the Admins sheet. Your assigned role determines your access.</p>
     
     <div class="input-group">
       <label for="adminEmailInput">Admin Email Address</label>
@@ -949,10 +949,6 @@
       </div>
     </div>
     
-    <div class="input-group" id="adminPasswordGroup">
-      <label for="adminPasswordInput">Admin Password</label>
-      <input id="adminPasswordInput" type="password" autocomplete="current-password">
-    </div>
     <div class="btn-action-center">
       <button onclick="loginAdmin()" style="min-width:180px;">Sign In as Admin</button>
     </div>
@@ -1530,7 +1526,7 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) load
 function loginAdmin() {
   clearAlert('adminAuthAlert');
   const email = document.getElementById('adminEmailInput').value.trim();
-  const password = document.getElementById('adminPasswordInput').value;
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { showAlert('adminAuthAlert', 'Enter a valid admin email address.'); return; }
   const epoch = ++adminEpoch;
 
   google.script.run
@@ -1545,7 +1541,6 @@ function loginAdmin() {
       currentAdminRole = res.accessRole === 'subadmin' ? 'subadmin' : 'admin';
       storedSession('adminSession', currentAdminSessionId);
       storedSession('adminEmail', currentAdminEmail);
-      document.getElementById('adminPasswordInput').value = '';
       document.getElementById('activeAdminDisplay').textContent = currentAdminEmail;
       document.getElementById('adminAuthSection').classList.add('hidden');
       document.getElementById('adminScannerSection').classList.remove('hidden');
@@ -1558,7 +1553,7 @@ function loginAdmin() {
       if (epoch !== adminEpoch) return;
       showAlert('adminAuthAlert', err.message || 'Admin verification failed.');
     })
-    .adminStatus(email, password);
+    .adminStatus(email);
 }
 
 async function startScanner() {
@@ -2059,7 +2054,6 @@ function logOutAdmin() {
   currentAdminEmail = '';
   currentAdminRole = 'admin';
   document.getElementById('activeAdminDisplay').textContent = '';
-  document.getElementById('adminPasswordInput').value = '';
   ['scanResultBox','popupParticipantName','popupParticipantId','popupCollege','popupContactInfo','popupTicketType','popupRegType','manualParticipantResults','totalParticipantCount','checkedInCount','notCheckedInCount','adminRoleBadge'].forEach(id => document.getElementById(id).replaceChildren());
   document.getElementById('manualParticipantSearch').value = '';
   cachedTrackStats = [];
@@ -2071,7 +2065,6 @@ function logOutAdmin() {
   closePopupModal();
 }
 
-if (!window.NODE_PORTAL) document.getElementById('adminPasswordGroup').classList.add('hidden');
 currentAdminSessionId = storedSession('adminSession');
 currentAdminEmail = storedSession('adminEmail') || '';
 if (currentAdminSessionId) {
