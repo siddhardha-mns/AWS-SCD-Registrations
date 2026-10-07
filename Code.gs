@@ -281,6 +281,28 @@ function redeemQR_(token,admin,track,confirmed,manual) {
 }
 
 /** Signed server-to-server RPC. Never place BRIDGE_SECRET in HTML or Git. */
+function bridgeSessionAuth_(id,version){
+  const auth=getSession_(id,'bridge-admin');
+  if(auth.credentialVersion!==version||!adminRole_(auth.email))throw new Error('Session expired. Please log in again.');
+  return auth;
+}
+function bridgeAdminRpc_(id,version,method,args){
+  return withLock_(()=>{
+    const auth=bridgeSessionAuth_(id,version),email=auth.email;
+    if(!Array.isArray(args))throw new Error('Invalid request.');
+    const methods={
+      bridgeGetAdminDashboard:()=>adminDashboard_(email),
+      bridgeGetTrackStats:()=>trackStats_(rows_()),
+      bridgeSearchParticipants:search=>searchParticipants_(search,email),
+      bridgeManageParticipant:(participantId,unused,action,value,reason,confirmed)=>manageParticipant_(participantId,email,action,value,reason,confirmed),
+      bridgeManualCheckin:(participantId,unused,track,confirmed)=>manualCheckin_(participantId,email,track,confirmed),
+      bridgeSetTrackLimit:(track,limit)=>{leadAdmin_(email);return setTrackLimit_(track,limit);},
+      bridgeRedeemQR:(token,unused,track,confirmed)=>redeemQR_(token,email,track,confirmed)
+    };
+    if(!Object.prototype.hasOwnProperty.call(methods,method))throw new Error('Unknown request.');
+    return methods[method].apply(null,args);
+  });
+}
 function doPost(e) {
   try {
     const envelope=JSON.parse(e.postData.contents);
@@ -300,6 +322,14 @@ function doPost(e) {
       properties.setProperty(key,String(Date.now()+120000));
     });
     const methods={getParticipantNames,verifyParticipant,getParticipantDashboard,logoutParticipant,
+      bridgeCreateAdminSession:(email,version)=>withLock_(()=>{
+        const normalized=normalizeEmail_(email),accessRole=adminRole_(normalized);
+        if(!accessRole||typeof version!=='string'||!/^[a-f0-9]{64}$/.test(version))throw new Error('Admin authentication required.');
+        throttle_('bridge-admin-login:'+normalized,10);
+        return {authorized:true,accessRole,sessionId:saveSession_('bridge-admin',{email:normalized,credentialVersion:version})};
+      }),
+      bridgeAdminRpc:bridgeAdminRpc_,
+      bridgeLogoutAdminSession:(id,version)=>withLock_(()=>{bridgeSessionAuth_(id,version);PropertiesService.getScriptProperties().deleteProperty('SESSION_'+id);return {ok:true};}),
       bridgeAdminStatus:email=>{if(!isAdmin_(email))throw new Error('Admin is not active in the sheet.');return {authorized:true,accessRole:adminRole_(email)};},
       bridgeGetAdminDashboard:email=>withLock_(()=>adminDashboard_(email)),
       bridgeSearchParticipants:(search,email)=>withLock_(()=>searchParticipants_(search,email)),

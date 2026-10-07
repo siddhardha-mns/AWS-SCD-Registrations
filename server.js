@@ -119,11 +119,13 @@ function readRedirect(url, remaining, resolve, reject) {
 
 async function createApp(config = {}) {
   const remote = config.PARTICIPANTS_URL;
+  const serverless = config.SERVERLESS === true;
+  if(serverless&&!remote)throw new Error('Set PARTICIPANTS_URL in Vercel Environment Variables to your Apps Script /exec URL.');
   const catalog = config.TRACK_CATALOG || [];
   const tracks = catalog.length ? catalog.map(t=>t.id) : TRACKS;
   if (new Set(tracks).size !== tracks.length || tracks.some(id=>typeof id!=='string'||!id.trim()||['__proto__','constructor','prototype'].includes(id))) throw new Error('Invalid track catalog.');
   if (remote && (!config.BRIDGE_SECRET || config.BRIDGE_SECRET.length < 32)) throw new Error('A BRIDGE_SECRET of at least 32 characters is required for Google Sheets mode. Redeploy Code.gs first.');
-  const store = new StateStore(config.STATE_DIR || path.join(__dirname, '.runtime'));
+  const store = serverless ? {data:{sessions:{}},close(){}} : new StateStore(config.STATE_DIR || path.join(__dirname, '.runtime'));
   const attempts = new Map();
   let people = [], lastRefresh = 0, refreshing;
   function throttle(key, max = 10) {
@@ -134,6 +136,10 @@ async function createApp(config = {}) {
     if (entry.count > max || attempts.size > 10000) throw new Error('Too many requests. Please wait one minute.');
   }
   function session(id, role) {
+    if(serverless&&role==='admin'){
+      if(typeof id!=='string'||!/^[-a-zA-Z0-9]{64,100}$/.test(id))throw new Error('Session expired. Please log in again.');
+      return {bridgeSessionId:id}; // Every privileged action validates this in the shared backend.
+    }
     const value = Object.hasOwn(store.data.sessions,id) ? store.data.sessions[id] : null;
     if (!value || value.expiresAt <= Date.now()) {
       if (value) store.transaction(data => { delete data.sessions[id]; });
@@ -200,8 +206,10 @@ async function createApp(config = {}) {
     });
   }
   const forward = (method, args) => bridgeRequest(remote, config.BRIDGE_SECRET, method, args);
+  const credentialVersion = () => crypto.createHash('sha256').update(JSON.stringify(Object.entries(config.ADMIN_CREDENTIALS||{}).sort(([a],[b])=>a.localeCompare(b)))).digest('hex');
+  const forwardAdmin = (auth, method, args) => serverless ? forward('bridgeAdminRpc',[auth.bridgeSessionId,credentialVersion(),method,args]) : forward(method,args);
   async function importRemoteLegacy() {
-    if (!remote) return;
+    if (!remote || serverless) return;
     const file = config.LEGACY_STATE_FILE || path.join(__dirname,'participant_tokens.json');
     const legacy = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file,'utf8')) : {};
     const records = Object.entries(legacy).filter(([,p])=>['checkin','food','goodie'].some(k=>redeemed(p[k+'Redeemed']))).map(([id,p])=>({id,checkinRedeemed:redeemed(p.checkinRedeemed),foodRedeemed:redeemed(p.foodRedeemed),goodieRedeemed:redeemed(p.goodieRedeemed),track:p.track||'',checkedInAt:p.checkedInAt||'',foodRedeemedAt:p.foodRedeemedAt||'',goodieRedeemedAt:p.goodieRedeemedAt||''}));
@@ -250,16 +258,16 @@ async function createApp(config = {}) {
       const validFormat = parts.length === 3 && parts[0] === 'scrypt' && /^[a-f0-9]{32}$/.test(parts[1]) && /^[a-f0-9]{128}$/.test(parts[2]);
       const actual = crypto.scryptSync(String(password || ''), validFormat ? parts[1] : '00000000000000000000000000000000', 64);
       if (!validFormat || !crypto.timingSafeEqual(actual, Buffer.from(parts[2],'hex'))) throw new Error('Admin authentication failed.');
-      const remoteIdentity = remote ? await forward('bridgeAdminStatus', [normalizeEmail(email)]) : null;
+      const remoteIdentity = remote ? await forward(serverless?'bridgeCreateAdminSession':'bridgeAdminStatus',serverless?[normalizeEmail(email),credentialVersion()]:[normalizeEmail(email)]) : null;
       const accessRole = remoteIdentity ? remoteIdentity.accessRole : config.ADMIN_ROLES?.[normalizeEmail(email)] || 'admin';
       if (!['admin','subadmin'].includes(accessRole)) throw new Error('Admin role is not configured correctly.');
-      return {authorized:true,email:normalizeEmail(email),accessRole,sessionId:newSession('admin',{email:normalizeEmail(email),credential:encoded,accessRole})};
+      return {authorized:true,email:normalizeEmail(email),accessRole,sessionId:serverless?remoteIdentity.sessionId:newSession('admin',{email:normalizeEmail(email),credential:encoded,accessRole})};
     },
-    async logoutAdmin([id]) { store.transaction(data => { if (data.sessions[id]?.role === 'admin') delete data.sessions[id]; }); return {ok:true}; },
-    async getTrackStats([id]) { const auth=session(id,'admin'); if(remote) return forward('bridgeGetTrackStats',[auth.email]); return stats(); },
+    async logoutAdmin([id]) { if(serverless){session(id,'admin');return forward('bridgeLogoutAdminSession',[id,credentialVersion()]);}store.transaction(data => { if (data.sessions[id]?.role === 'admin') delete data.sessions[id]; }); return {ok:true}; },
+    async getTrackStats([id]) { const auth=session(id,'admin'); if(remote) return forwardAdmin(auth,'bridgeGetTrackStats',[auth.email]); return stats(); },
     async getAdminDashboard([id]) {
       const auth=session(id,'admin');
-      if(remote)return forward('bridgeGetAdminDashboard',[auth.email]);
+      if(remote)return forwardAdmin(auth,'bridgeGetAdminDashboard',[auth.email]);
       const checkedIn=people.filter(p=>store.data.participants[p.id].checkinRedeemed).length;
       const onHold=people.filter(p=>store.data.participants[p.id].onHold).length;
       const reserved=people.filter(p=>store.data.participants[p.id].track).length;
@@ -268,12 +276,12 @@ async function createApp(config = {}) {
     async searchAdminParticipants([search,id],context) {
       const auth=session(id,'admin');throttle('staff-search:'+context.ip,60);
       const query=normalizeName(search);if(query.length<2)return [];
-      if(remote)return forward('bridgeSearchParticipants',[search,auth.email]);
+      if(remote)return forwardAdmin(auth,'bridgeSearchParticipants',[search,auth.email]);
       return people.filter(p=>p.id.toLowerCase()===query||normalizeName(p.name).includes(query)).slice(0,30).map(p=>({id:p.id,name:p.name,college:p.college,ticketType:p.ticketType,onHold:!!store.data.participants[p.id].onHold,checkedIn:store.data.participants[p.id].checkinRedeemed,track:store.data.participants[p.id].track||''}));
     },
     async manageParticipant([participantId,id,action,value,reason,confirmed]) {
       const auth=session(id,'admin');
-      if(remote)return forward('bridgeManageParticipant',[participantId,auth.email,action,value,reason,confirmed]);
+      if(remote)return forwardAdmin(auth,'bridgeManageParticipant',[participantId,auth.email,action,value,reason,confirmed]);
       const role=auth.accessRole;
       if((action==='track'&&role!=='subadmin')||((action==='hold'||action==='restore')&&role!=='admin'))throw new Error(action==='track'?'Only sub-admins can assign tracks.':'Only lead admins can put registrations on hold or restore them.');
       if(confirmed!==true||typeof reason!=='string'||!reason.trim()||reason.length>500)throw new Error('Confirmation and a reason (1–500 characters) are required.');
@@ -295,22 +303,22 @@ async function createApp(config = {}) {
     },
     async manualCheckin([participantId,id,track,confirmed]) {
       const auth=session(id,'admin');
-      if(remote)return forward('bridgeManualCheckin',[participantId,auth.email,track,confirmed]);
+      if(remote)return forwardAdmin(auth,'bridgeManualCheckin',[participantId,auth.email,track,confirmed]);
       const person=people.find(p=>p.id===participantId);if(!person)throw new Error('Participant not found.');
       const result=await handlers.redeemQR([store.data.participants[person.id].checkinToken,id,track,confirmed],null,true);
       return {...result,manualCheckin:true};
     },
     async setTrackLimit([track, limit, id]) {
       const auth=session(id,'admin');
+      if(remote) return forwardAdmin(auth,'bridgeSetTrackLimit',[track,limit,auth.email]);
       if(!remote&&auth.accessRole!=='admin')throw new Error('Only lead admins can change track capacities.');
       if (!tracks.includes(track) || !Number.isSafeInteger(limit) || limit < 0) throw new Error('Invalid track capacity.');
-      if(remote) return forward('bridgeSetTrackLimit',[track,limit,auth.email]);
       if(limit>0&&limit<stats().find(s=>s.track===track).enrolled)throw new Error('Capacity cannot be below the number of seats already reserved or checked in.');
       store.transaction(data=>{data.limits[track]=limit;}); return {ok:true,stats:stats()};
     },
     async redeemQR([token, id, track, confirmed],context,manual=false) {
       const auth=session(id,'admin');
-      if(remote) return forward('bridgeRedeemQR',[token,auth.email,track,confirmed]);
+      if(remote) return forwardAdmin(auth,'bridgeRedeemQR',[token,auth.email,track,confirmed]);
       let found, kind;
       for(const p of people) for(const type of ['checkin','food','goodie']) if(store.data.participants[p.id][type+'Token']===token){found=p;kind=type;}
       if(!found) throw new Error('Invalid QR pass.');
@@ -345,7 +353,7 @@ async function createApp(config = {}) {
     await refresh(); return handlers[method](args,context);
   }
   try {await refresh(true);await importRemoteLegacy();} catch(error){store.close();throw error;}
-  const server=http.createServer(async(req,res)=>{
+  const handler=async(req,res)=>{
     res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');res.setHeader('X-Frame-Options','DENY');
     const url=new URL(req.url,'http://localhost');
     if(req.method==='GET'&&url.pathname==='/') {
@@ -354,29 +362,58 @@ async function createApp(config = {}) {
     if(req.method!=='POST'||url.pathname!=='/api/rpc'){res.writeHead(404);return res.end();}
     if(!/^application\/json(?:;|$)/i.test(req.headers['content-type']||'')){res.writeHead(415);return res.end();}
     if(req.headers.origin){try{if(new URL(req.headers.origin).host!==req.headers.host){res.writeHead(403);return res.end();}}catch{res.writeHead(403);return res.end();}}
-    let body=''; let bytes=0;
-    req.on('data',chunk=>{bytes+=chunk.length;if(bytes>16384){res.writeHead(413);res.end();req.destroy();}else body+=chunk;});
-    req.on('end',async()=>{
-      if(res.writableEnded)return;
-      try {const input=JSON.parse(body);const data=await rpc(input.method,input.args,{ip:req.socket.remoteAddress});res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify({ok:true,data}));}
-      catch(error){res.writeHead(400,{'Content-Type':'application/json'});res.end(JSON.stringify({ok:false,error:error.message}));}
-    });
-  });
-  return {server,rpc,close:()=>{server.close();store.close();},store,refresh};
+    try {
+      let input;
+      if(req.body!==undefined){
+        const raw=typeof req.body==='string'||Buffer.isBuffer(req.body)?req.body:JSON.stringify(req.body);
+        if(Buffer.byteLength(raw)>16384){res.writeHead(413);return res.end();}
+        input=typeof req.body==='string'||Buffer.isBuffer(req.body)?JSON.parse(String(req.body)):req.body;
+      }else{
+        const chunks=[];let bytes=0;
+        for await(const chunk of req){bytes+=Buffer.byteLength(chunk);if(bytes>16384){res.writeHead(413);return res.end();}chunks.push(Buffer.from(chunk));}
+        input=JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      }
+      if(!input||typeof input!=='object')throw new Error('Invalid request.');
+      const data=await rpc(input.method,input.args,{ip:req.socket?.remoteAddress||'unknown'});
+      res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify({ok:true,data}));
+    }catch(error){res.writeHead(400,{'Content-Type':'application/json'});res.end(JSON.stringify({ok:false,error:error.message}));}
+  };
+  const server=http.createServer(handler);
+  return {server,handler,rpc,close:()=>{server.close();store.close();},store,refresh};
+}
+function loadConfig(serverless=false){
+  const filename=path.join(__dirname,'config.json');
+  const config=!serverless&&fs.existsSync(filename)?JSON.parse(fs.readFileSync(filename,'utf8')):{};
+  for(const key of ['PARTICIPANTS_URL','PARTICIPANTS_FILE','BRIDGE_SECRET','STATE_DIR'])if(process.env[key])config[key]=process.env[key];
+  for(const key of ['ADMIN_CREDENTIALS','ADMIN_ROLES','TRACK_CATALOG','COMMON_SESSIONS'])if(process.env[key]){
+    try{config[key]=JSON.parse(process.env[key]);}catch{throw new Error('Invalid JSON in '+key+' environment variable.');}
+  }
+  if(serverless)config.SERVERLESS=true;
+  return config;
+}
+let hostedApp;
+async function vercelHandler(req,res){
+  res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');res.setHeader('X-Frame-Options','DENY');
+  const url=new URL(req.url,'http://localhost');
+  // Serve the public UI without disk state or a network call during startup.
+  if(req.method==='GET'&&url.pathname==='/'){
+    res.writeHead(200,{'Content-Type':'text/html; charset=utf-8'});return res.end(renderHtml(fs.readFileSync(path.join(__dirname,'Index.html'),'utf8'),url.searchParams.get('page')));
+  }
+  if(req.method==='GET'&&url.pathname==='/favicon.ico'){res.writeHead(204);return res.end();}
+  if(req.method!=='POST'||url.pathname!=='/api/rpc'){res.writeHead(404);return res.end();}
+  try{
+    if(!hostedApp)hostedApp=createApp(loadConfig(true)).catch(error=>{hostedApp=undefined;throw error;});
+    const app=await hostedApp;return await app.handler(req,res);
+  }catch(error){
+    console.error('Portal configuration error: '+error.message);
+    res.writeHead(503,{'Content-Type':'application/json'});res.end(JSON.stringify({ok:false,error:error.message}));
+  }
 }
 async function main() {
-  const filename=path.join(__dirname,'config.json');
-  const config=fs.existsSync(filename)?JSON.parse(fs.readFileSync(filename,'utf8')):{};
-  for(const key of ['PARTICIPANTS_URL','PARTICIPANTS_FILE','BRIDGE_SECRET','STATE_DIR'])if(process.env[key])config[key]=process.env[key];
-  if(process.env.ADMIN_CREDENTIALS)config.ADMIN_CREDENTIALS=JSON.parse(process.env.ADMIN_CREDENTIALS);
-  if(process.env.ADMIN_ROLES)config.ADMIN_ROLES=JSON.parse(process.env.ADMIN_ROLES);
-  if(process.env.TRACK_CATALOG)config.TRACK_CATALOG=JSON.parse(process.env.TRACK_CATALOG);
-  if(process.env.COMMON_SESSIONS)config.COMMON_SESSIONS=JSON.parse(process.env.COMMON_SESSIONS);
-  if(process.env.TRACK_BOOKING_OPEN)config.TRACK_BOOKING_OPEN=process.env.TRACK_BOOKING_OPEN==='true';
-  const app=await createApp(config);
+  const app=await createApp(loadConfig());
   app.server.on('error',error=>{console.error(error.message);app.close();process.exitCode=1;});
   app.server.listen(Number(process.env.PORT||3000),()=>console.log('Portal listening on port '+(process.env.PORT||3000)));
   for(const signal of ['SIGINT','SIGTERM'])process.once(signal,()=>{app.close();process.exit();});
 }
-if(require.main===module)main().catch(error=>{console.error('Startup failed: '+error.message);process.exitCode=1;});
-module.exports={createApp,prepareRows,parseCsv,renderHtml,phone};
+if(require.main===module&&!process.env.VERCEL)main().catch(error=>{console.error('Startup failed: '+error.message);process.exitCode=1;});
+module.exports=Object.assign(vercelHandler,{createApp,prepareRows,parseCsv,renderHtml,phone,loadConfig});

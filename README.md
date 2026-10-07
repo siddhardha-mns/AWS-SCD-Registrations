@@ -60,7 +60,7 @@ The practice demo has only **Dummy Event 1** and **Dummy Event 2**, with one sea
 
 Requires Node.js 22 or later; no npm packages are required. Run `npm run admin-password` to generate a salted scrypt password hash. Use a unique password of at least 16 characters. The helper accepts stdin so the password does not need to appear in shell command arguments. Treat your terminal as private when entering it.
 
-Create a local, ignored `config.json`:
+Create a private local `config.json` (do not commit passwords or secrets):
 
 ```json
 {
@@ -79,6 +79,22 @@ Create a local, ignored `config.json`:
 ```
 
 `PARTICIPANTS_URL`, `PARTICIPANTS_FILE`, `BRIDGE_SECRET`, `STATE_DIR`, and JSON-encoded `ADMIN_CREDENTIALS`/`ADMIN_ROLES` can also be supplied as environment variables, overriding local config. `PORT` defaults to 3000. There are no default admin credentials. In Sheets mode the email must also be active in the sheet and its sheet role is authoritative; `ADMIN_ROLES` controls local-file mode.
+
+## Vercel deployment
+
+Vercel uses the exported request handler in `server.js`, not a persistent listening process. Hosted mode requires Google Sheets and uses its shared participant/admin sessions; it does not write runtime files or read the repository's `config.json`.
+
+1. Copy the updated `Code.gs` into your existing Apps Script project. Select **Deploy > Manage deployments > Edit > New version > Deploy**. Keep the same `/exec` URL.
+2. In Vercel, open **Project > Settings > Environment Variables** and add these for Production (and Preview if you test preview deployments):
+   - `PARTICIPANTS_URL`: your portal's Apps Script `/exec` URL.
+   - `BRIDGE_SECRET`: exactly the same secret as the Apps Script Script Property; at least 32 characters.
+   - `ADMIN_CREDENTIALS`: a JSON object mapping each staff email to its generated scrypt hash, for example `{"organizer@example.com":"scrypt:YOUR_SALT:YOUR_PASSWORD_HASH"}`. Generate each hash with `npm run admin-password`. The email must also be active in the `Admins` sheet.
+3. Deploy the updated Git commit, or open **Deployments > latest deployment > Redeploy** after changing environment variables.
+4. Open your Vercel domain for participants, or append `/?page=admin` for staff. Test participant sign-in, staff sign-in, and a test participant's single-use check-in.
+
+Missing configuration leaves the public page available but returns a clear setup error for API requests. Admin sessions are checked against current sheet permissions on every action; logout works across server instances. Changing the configured password hashes invalidates existing hosted admin sessions.
+
+If you still have local legacy redemption state to migrate, run the configured local server once before the cloud rollout and verify the sheet. Vercel intentionally does not replay checked-in runtime files during cold starts.
 
 ## Admin and sub-admin desks
 
