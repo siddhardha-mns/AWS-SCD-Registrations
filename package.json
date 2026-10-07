@@ -1,6 +1,7 @@
 {
   "name": "aws-scd-registrations",
   "version": "1.0.0",
+  "engines": { "node": "22.x" },
   "description": "Event QR Portal with Google Apps Script + Local Dev Server",
   "scripts": {
     "start": "node server.js",
