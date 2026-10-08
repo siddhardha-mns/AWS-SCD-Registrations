@@ -4,7 +4,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const sb = require('./supabase-store');
 
-const TRACKS = ['Track Devops', 'Track Cloud'];
+const TRACKS = ['Track Devops', 'Track Cloud', 'Track Data and AI'];
 const normalizeName = value => String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
 const normalizeEmail = value => String(value || '').trim().toLowerCase();
 const ADMIN_LOGIN_MODE = 'email-allowlist-v1';
