@@ -1,0 +1,13 @@
+# DevCatalyst@Mecs
+
+# Environment secrets — never commit these
+.env
+
+# Runtime state (now in Supabase, not needed locally)
+.runtime/
+
+# Node
+node_modules/
+
+# OS
+.DS_Store
